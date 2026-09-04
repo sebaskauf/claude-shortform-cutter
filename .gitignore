@@ -1,0 +1,27 @@
+# Secrets
+.env
+*.key
+
+# Python-Umgebungen
+.venv*/
+venv/
+__pycache__/
+*.pyc
+
+# Arbeitsdaten pro Video (Transkripte, Audio, Renders — privat + groß)
+work/
+
+# Medien
+*.mov
+*.mp4
+*.wav
+*.m4a
+*.mkv
+
+# System
+.DS_Store
+*.log
+nohup.out
+
+# Lokal generierte Claude-Projekt-Settings (schreibt cockpit_setup.py)
+.claude/
