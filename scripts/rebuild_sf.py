@@ -148,6 +148,12 @@ try:
     print(f"[rebuild_sf] Ton gemessen: {_m['input_i']} LUFS -> Ziel {LUFS}", flush=True)
 except Exception as _e:                      # nie am Ton scheitern
     print(f"[rebuild_sf] Ton-Messung fehlgeschlagen ({_e}) — einfacher Durchgang", flush=True)
+# LIMITER dahinter (04.09.): loudnorm haelt seine True-Peak-Vorgabe nicht
+# zuverlaessig ein — der erste Export landete bei -0,10 dBTP statt -1,0 und
+# waere beim Transkodieren der Plattform in die Uebersteuerung gelaufen.
+# alimiter garantiert die Decke, ohne den Pegel darunter anzutasten.
+_limit = 10 ** (PEAK / 20.0)
+_af += f",alimiter=level_in=1:level_out=1:limit={_limit:.4f}:attack=5:release=50:level=disabled"
 run(["ffmpeg", "-y", "-loglevel", "error", "-i", cut_raw, "-c:v", "copy",
      # -ar 48000 ist Pflicht: loudnorm gibt sonst mit ueberhoehter Rate aus und
      # der AAC-Encoder landet bei 96 kHz (groesser, und nicht jeder Player mag es).
