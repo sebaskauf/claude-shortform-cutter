@@ -36,8 +36,29 @@ eigener 5-Sekunden-Beat, der **automatisch auf die Clip-Länge beschleunigt**
 wird — der Inhalt bleibt vollständig, nur das Tempo passt sich an. Erster und
 letzter Clip bleiben frei (Hook und Call-to-Action).
 
-Die fertigen Beats hängen sich selbst an ihre Clips. Wenn du danach einen Clip
-trimmst, passt sich das B-Roll-Tempo von allein wieder an.
+Die fertigen Beats hängen sich selbst an ihre Clips — auch dann, wenn du die
+Seite zwischendurch neu lädst: Das Cockpit sieht beim Laden nach, ob etwas
+fertig geworden ist, und trägt es nach. Wenn du danach einen Clip trimmst,
+passt sich das B-Roll-Tempo von allein wieder an.
+
+**Phase C — ein Klick auf "Exportieren".**
+
+Fertiges Video, 1080×1920 bei 60 fps, CRF 16 und `faststart` fürs Hochladen.
+Es landet in `export/` und wird gleich im Finder gezeigt. Der Talking Head
+bekommt echte 60 Bilder, wenn dein Rohmaterial 60p ist.
+
+## Im Cockpit
+
+- **Bild verschieben:** Pack das Video im Player an und zieh es — nach oben,
+  unten, links, rechts. Kein Zoom, keine Skalierung. Sind mehrere Clips
+  markiert, wandern sie alle um dasselbe Stück mit.
+- **Eigene Medien:** Zieh eine Datei aus dem Finder ins Fenster. Über den
+  First-Frame-Kacheln wird sie das Hook-Bild, sonst landet sie am Playhead
+  auf der Timeline und ist dort frei verschieb- und skalierbar.
+- **Lautstärke:** Jedes Video wird automatisch auf denselben Pegel gebracht
+  (−11 LUFS bei −1 dBTP, in zwei Durchgängen gemessen statt geschätzt). Der
+  Regler oben nimmt ihn zurück, falls es einmal zu laut ist.
+- **Farb-Look:** Die CapCut-Regler pro Clip, für mehrere Clips gleichzeitig.
 
 ## Was du brauchst
 

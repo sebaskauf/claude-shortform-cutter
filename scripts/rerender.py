@@ -170,12 +170,37 @@ def main():
 LOOK_KEYS = ("exp", "bri", "con", "sat", "tmp", "tnt", "shp", "hig", "sha")
 
 
+def build_geo_filter(c, w=1080, h=1920):
+    """Bildversatz pro Clip -> pad+crop (04.09., ohne Zoom).
+
+    der Nutzer will das Bild schieben wie einen Textkasten: nach oben, unten,
+    links, rechts — und sonst nichts. Kein Hineinzoomen, keine Skalierung.
+    Was am Rand hinauswandert, ist auf der anderen Seite schwarz; das ist
+    gewollt und dieselbe Logik, die er von CapCut kennt.
+
+    ox/oy in Prozent der Bildbreite/-hoehe, positiv = nach rechts / nach unten.
+    Gleiche Formel wie clipGeoCss() im Cockpit: dort translate(ox%, oy%).
+    """
+    ox = float(c.get("ox") or 0)
+    oy = float(c.get("oy") or 0)
+    if abs(ox) < 0.01 and abs(oy) < 0.01:
+        return f"scale={w}:{h}"
+    dx = int(round(w * ox / 100.0))
+    dy = int(round(h * oy / 100.0))
+    ax, ay = abs(dx), abs(dy)
+    # Leinwand beidseitig aufweiten, Bild versetzt hineinlegen, Fenster
+    # wieder herausschneiden: verschiebt ohne zu skalieren.
+    return (f"scale={w}:{h},"
+            f"pad={w + 2 * ax}:{h + 2 * ay}:{ax + dx}:{ay + dy}:black,"
+            f"crop={w}:{h}:{ax}:{ay}")
+
+
 def build_look_filter(c):
     """CapCut-Farb-Look pro Clip -> ffmpeg-Filterkette (mit fuehrendem Komma).
 
     CapCut-Skala -50..+50 (Schaerfe 0..100). Die exakten CapCut-Formeln sind
     nicht oeffentlich — exp und sat sind deshalb GEMESSEN (03.09.2026), nicht
-    geraten: der Rohaufnahme IMG_0910 gegen seinen CapCut-Export des
+    geraten: des Nutzers Rohaufnahme IMG_0910 gegen seinen CapCut-Export des
     gleichen Videos (Tag 210), Frames geometrisch registriert (Talking Head
     im Export 1.22x skaliert, ~195px versetzt), Delta in CIELAB auf fester
     Pixelmaske. Sein Standard sat +5 / exp -5 wirkt dort dL*=-6.09 bei
@@ -358,7 +383,7 @@ def apply_jcut_edges(segs, pauses=None):
         # Die ROLL-Kuerzung vom 30.08. (a_dur = vdur_q + j − j_next) sollte
         # den Doppelton-Befund fixen, hat aber bei jcut > echte Naht-Stille
         # das LETZTE WORT jedes Segments mitten im Phonem gekappt (yt1b: 79%
-        # der 95 Naehte, Median-Stille 0,12s vs. jcut 0,25s) — Sebastians
+        # der 95 Naehte, Median-Stille 0,12s vs. jcut 0,25s) — des Nutzers
         # "Stotterer an jedem L-Cut". Der Doppelton selbst entstand aus der
         # gleichen Fehlannahme (fester jcut ohne Stille-Pruefung). Beides
         # fixt jetzt der SILENCE-CLAMP oben: jcut kann nie groesser sein als
@@ -645,7 +670,7 @@ def render_segments(segs, src, out_mp4, mode, broll, workdir):
     # 5. B-Roll-Overlay-Pass (Zeiten beziehen sich auf die NEUE Proxy-Timeline)
     #    ACHTUNG: Wenn ein Sync-Pass folgt (broll_sync.json existiert), rendert
     #    DER die Slots — hier einbrennen wuerde die Facecam-Kreis-Quelle
-    #    zerstoeren (Kreis zeigte dann die Grafik statt der Gesicht).
+    #    zerstoeren (Kreis zeigte dann die Grafik statt des Nutzers Gesicht).
     valid_broll = [b for b in broll if b.get("file") and os.path.exists(b["file"])
                    and b.get("end", 0) > b.get("start", 0)]
     if valid_broll and os.path.exists(os.path.join(workdir, "broll_sync.json")):
@@ -690,11 +715,7 @@ def render_segments(segs, src, out_mp4, mode, broll, workdir):
     #    den aktuellen effektiven Segmenten -> ueberlebt Re-Cuts.
     sync_cfg = os.path.join(workdir, "broll_sync.json")
     segs_eff = os.path.join(workdir, "segments_effective.json")
-    # broll_sync_pass.py ist ein Longform-Werkzeug (B-Roll ueber mehrere
-    # Aufnahmen synchronisieren) und in dieser Shortform-Fassung nicht
-    # enthalten. Ohne die Datei wird der Pass still uebersprungen.
-    _sync_bin = os.path.join(HERE, "broll_sync_pass.py")
-    if os.path.exists(sync_cfg) and os.path.exists(segs_eff) and os.path.exists(_sync_bin):
+    if os.path.exists(sync_cfg) and os.path.exists(segs_eff):
         tmp_sync = out_mp4 + ".sync.mp4"
         r = run([sys.executable, os.path.join(HERE, "broll_sync_pass.py"),
                  out_mp4, segs_eff, sync_cfg, tmp_sync, "--mode", mode])

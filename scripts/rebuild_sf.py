@@ -18,16 +18,31 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 import numpy as np  # noqa: F401  (Haltung: gleiche venv wie Pipeline)
 from PIL import Image, ImageDraw, ImageFont
+
+_T0 = time.time()   # Renderdauer, damit der Nutzer sie schwarz auf weiss hat
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import rerender as _rr  # noqa: E402  (Look-Tabelle — EINE Implementierung)
 
 WORKDIR = os.path.abspath(sys.argv[1])
 SRC = os.path.abspath(sys.argv[2])
-W, H, FPS = 1080, 1920, 30
+# EXPORT-MODUS (04.09.): derselbe Renderweg, nur mit 60 fps und einem eigenen
+# Ziel statt proxy.mp4. des Nutzers Rohmaterial ist 60p — der Talking Head
+# bekommt damit echte 60 Bilder, die B-Roll-Karten (HyperFrames, 30p) werden
+# verdoppelt. Ohne die Schalter bleibt alles exakt wie vorher.
+ARGS = sys.argv[3:]
+EXPORT = "--export" in ARGS
+FPS = 60 if EXPORT else 30
+if "--fps" in ARGS:
+    FPS = int(ARGS[ARGS.index("--fps") + 1])
+ZIEL = None
+if "--out" in ARGS:
+    ZIEL = os.path.abspath(ARGS[ARGS.index("--out") + 1])
+W, H = 1080, 1920
 
 
 def load(name, default):
@@ -63,7 +78,14 @@ lay = load("sf_layout.json", {})
 if not clips:
     raise SystemExit("[rebuild_sf] keine timeline_clips in cockpit_overrides.json")
 
+_aud = lay.get("audio") or {}
+# Der Regler im Cockpit nimmt den Standardpegel nur zurueck (0 = Standard).
+_gain_db = float(((ovr.get("audio") or {}).get("gain_db")) or 0)
+_gain_db = max(-24.0, min(0.0, _gain_db))
+LUFS = float(_aud.get("lufs", -11.0)) + _gain_db     # lauter als der -14-Standard
+PEAK = float(_aud.get("peak", -1.0))      # True Peak, knapp unter Vollausschlag
 print(f"[rebuild_sf] {len(clips)} Schnitt-Clips, {len(slots)} B-Roll-Slots, {len(caps)} Text-Clips", flush=True)
+print(f"[rebuild_sf] Ton: {LUFS} LUFS, Spitzen bis {PEAK} dB", flush=True)
 
 tmpdir = os.path.join(WORKDIR, "rebuild_sf")
 os.makedirs(tmpdir, exist_ok=True)
@@ -85,7 +107,9 @@ with open(concat_list, "w") as lf:
             af = f"volume={gain}dB," + af
         # FARB-LOOK (01.09.): kompletter CapCut-Regler-Satz pro Clip —
         # identische Tabelle wie Longform-Render + Cockpit-Preview.
-        vf = "scale=1080:1920,fps=30" + _rr.build_look_filter(c)
+        # Bildversatz (04.09.) vor dem Look: scale+crop statt reinem scale,
+        # sobald der Clip ein oy traegt. Ohne oy exakt wie vorher.
+        vf = _rr.build_geo_filter(c, 1080, 1920) + ",fps=30" + _rr.build_look_filter(c)
         run(["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{a:.4f}", "-t", f"{d:.4f}", "-i", SRC,
              "-vf", vf, "-af", af,
              "-c:v", "libx264", "-crf", "17", "-preset", "fast", "-pix_fmt", "yuv420p",
@@ -98,10 +122,36 @@ cut_raw = os.path.join(tmpdir, "cut_raw.mp4")
 cut = os.path.join(tmpdir, "cut.mp4")
 run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", concat_list,
      "-c", "copy", cut_raw], "concat")
+# LAUTSTAERKE (04.09.): -14 LUFS ist Streaming-Standard und klang zu leise.
+# des Nutzers CapCut-Verfahren ist "so weit aufdrehen, bis die lautesten Stellen
+# an die orange Marke stossen" — hohe Spitzen ohne Uebersteuern. Nachgebaut mit
+# -11 LUFS und True Peak -1,0 dB; ueber sf_layout.json -> audio.lufs/audio.peak
+# und den Regler im Cockpit (audio.gain_db, nur leiser) anpassbar.
+#
+# ZWEI DURCHGAENGE (04.09.): Ein einzelner loudnorm-Lauf schaetzt nur und
+# verfehlte das Ziel um rund 4 dB — gemessen an tag212 (-15,1 statt -11 LUFS)
+# und sf0912 (-14,6). Deshalb erst messen, dann mit den gemessenen Werten
+# normalisieren; damit trifft der Pegel wirklich.
+_mess = subprocess.run(
+    ["ffmpeg", "-hide_banner", "-nostats", "-i", cut_raw,
+     "-af", f"loudnorm=I={LUFS}:TP={PEAK}:LRA=11:print_format=json",
+     "-f", "null", "-"], capture_output=True, text=True)
+_af = f"loudnorm=I={LUFS}:TP={PEAK}:LRA=11"
+try:
+    _blk = re.search(r"\{[^{}]*input_i[^{}]*\}", _mess.stderr, re.S).group(0)
+    _m = json.loads(_blk)
+    _af = ("loudnorm="
+           f"I={LUFS}:TP={PEAK}:LRA=11"
+           f":measured_I={_m['input_i']}:measured_TP={_m['input_tp']}"
+           f":measured_LRA={_m['input_lra']}:measured_thresh={_m['input_thresh']}"
+           f":offset={_m['target_offset']}:linear=true:print_format=summary")
+    print(f"[rebuild_sf] Ton gemessen: {_m['input_i']} LUFS -> Ziel {LUFS}", flush=True)
+except Exception as _e:                      # nie am Ton scheitern
+    print(f"[rebuild_sf] Ton-Messung fehlgeschlagen ({_e}) — einfacher Durchgang", flush=True)
 run(["ffmpeg", "-y", "-loglevel", "error", "-i", cut_raw, "-c:v", "copy",
      # -ar 48000 ist Pflicht: loudnorm gibt sonst mit ueberhoehter Rate aus und
      # der AAC-Encoder landet bei 96 kHz (groesser, und nicht jeder Player mag es).
-     "-af", "loudnorm=I=-14:TP=-1.5:LRA=11", "-ar", "48000",
+     "-af", _af, "-ar", "48000",
      "-c:a", "aac", "-b:a", "192k", cut], "loudnorm")
 dur_total = probe_dur(cut)
 seg_bounds = []
@@ -114,7 +164,7 @@ print(f"[rebuild_sf] Schnitt: {dur_total:.2f}s", flush=True)
 # --- clip-gebundene Slots (03.09.) -----------------------------------------
 # Ein B-Roll gehoert zu genau einem Clip und fuellt ihn exakt aus. Die Grenzen
 # kommen deshalb IMMER aus dem geschnittenen Clip (seg_bounds = gemessene
-# Dauern nach dem Schnitt), nie aus gespeicherten Zeiten. Korrigiert Sebastian
+# Dauern nach dem Schnitt), nie aus gespeicherten Zeiten. Korrigiert der Nutzer
 # den Schnitt nach, passt speed:"fit" das Tempo automatisch an die neue Laenge
 # an — ohne das B-Roll neu zu bauen.
 _by_id = {c.get("id"): i for i, c in enumerate(clips) if c.get("id") is not None}
@@ -175,15 +225,15 @@ for i, b in enumerate(slots):
 # --- 3) Caption-Layer (PIL, Wort-Karaoke + Pink-Box) -----------------------
 capdir = os.path.join(tmpdir, "cap_png")
 os.makedirs(capdir, exist_ok=True)
-try:
-    import caption_style as _cs
-except ImportError:
-    _cs = None
 if _cs is None:
     print("[rebuild_sf] Caption-Modul nicht vorhanden — Text-Layer wird uebersprungen",
           flush=True)
     caps = []
-CAP_STYLE = _cs.load_style(lay) if _cs else {}
+try:
+    import caption_style as _cs
+except ImportError:
+    _cs = None
+CAP_STYLE = _cs.load_style(lay)
 font_path = CAP_STYLE["font"]
 PINK = tuple(lay.get("caption", {}).get("pink", [212, 67, 106])) + (255,)
 STROKE = int(lay.get("caption", {}).get("stroke", 7))
@@ -373,11 +423,23 @@ if i_pill is not None:
 fc.append(f"{prev}[{i_cap}:v]overlay=0:0:eof_action=pass,format=yuv420p[vout]")
 
 final_tmp = os.path.join(tmpdir, "proxy_new.mp4")
+# Export darf laenger rechnen: langsameres Preset, etwas feineres CRF und
+# High-Profile-Ausgabe fuer Instagram/TikTok. Der Arbeits-Proxy bleibt schnell.
+_crf = "16" if EXPORT else "17"
+_preset = "slow" if EXPORT else "fast"
+_extra = ["-profile:v", "high", "-level", "4.2", "-movflags", "+faststart",
+          "-x264-params", "keyint=120:min-keyint=60"] if EXPORT else []
 run(["ffmpeg", "-y", "-loglevel", "warning"] + inputs + [
     "-filter_complex", ";".join(fc), "-map", "[vout]", "-map", "0:a",
-    "-c:v", "libx264", "-crf", "17", "-preset", "fast", "-pix_fmt", "yuv420p",
+    "-c:v", "libx264", "-crf", _crf, "-preset", _preset, "-pix_fmt", "yuv420p",
+    "-r", str(FPS)] + _extra + [
     "-c:a", "copy", "-t", f"{dur_total:.3f}", final_tmp], "Composite")
 
-proxy = os.path.join(WORKDIR, "proxy.mp4")
+proxy = ZIEL or os.path.join(WORKDIR, "proxy.mp4")
+os.makedirs(os.path.dirname(proxy), exist_ok=True)
 os.replace(final_tmp, proxy)
-print(f"[rebuild_sf] FERTIG: proxy.mp4 ersetzt ({probe_dur(proxy):.2f}s)", flush=True)
+print(f"[rebuild_sf] FERTIG: {os.path.basename(proxy)} ({probe_dur(proxy):.2f}s, "
+      f"{FPS} fps) in {time.time()-_T0:.0f}s Renderzeit", flush=True)
+if EXPORT:
+    # Fertige Datei gleich im Finder zeigen — der Nutzer laedt sie von dort hoch.
+    subprocess.run(["open", "-R", proxy], check=False)

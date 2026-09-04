@@ -795,6 +795,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.broll_request()
             if route == "/api/rerender":
                 return self.rerender()
+            if route == "/api/export":
+                return self.export_final()
             if route == "/api/term/input":
                 return self.term_input()
             if route == "/api/term/resize":
@@ -1260,7 +1262,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Content-Length", str(length))
             # CACHE-FIX 30.08.2026: Ohne no-store cachte Electron/Chrome alte
-            # Video-Bytes ueber einen Dateitausch hinweg (V6-Intra: Sebastian
+            # Video-Bytes ueber einen Dateitausch hinweg (V6-Intra: der Nutzer
             # hoerte tagelang die ALTE, versetzte Fassung trotz Fix + Reload).
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
@@ -1290,6 +1292,9 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     MEDIEN_MAX = 400 * 1024 * 1024      # 400 MB je Datei
+    # First-Frame-Bilder: kein GIF, kein Video — das Hook-Overlay ist ein Standbild
+    FF_TYPEN = {".png": "image/png", ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg", ".webp": "image/webp"}
     MEDIEN_TYPEN = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                     ".webp": "image/webp", ".gif": "image/gif",
                     ".mp4": "video/mp4", ".mov": "video/quicktime",
@@ -1302,12 +1307,20 @@ class Handler(BaseHTTPRequestHandler):
         gebautes First-Frame-Bild. Die Datei landet in <workdir>/medien/ und
         wird von dort ausgeliefert; die Timeline bekommt nur den Pfad.
         """
+        # ZIEL (04.09.): Seit dem Finder-Drop kann derselbe Upload zweierlei
+        # bedeuten — ein Medium auf die Timeline oder ein First-Frame-Bild fuer
+        # den Visual Hook. Der Header sagt welches; ohne Header bleibt alles
+        # wie vorher (medien/), damit der Knopf-Import unveraendert laeuft.
+        ziel_art = (self.headers.get("X-Ziel") or "medien").strip().lower()
+        if ziel_art not in ("medien", "firstframe"):
+            ziel_art = "medien"
+        erlaubt = self.MEDIEN_TYPEN if ziel_art == "medien" else self.FF_TYPEN
         name = os.path.basename(self.headers.get("X-Dateiname", "") or "")
         ext = os.path.splitext(name)[1].lower()
-        if not name or ext not in self.MEDIEN_TYPEN:
+        if not name or ext not in erlaubt:
             return self._send_json(
                 {"error": "Dateityp nicht unterstuetzt: %r (erlaubt: %s)"
-                          % (name, ", ".join(sorted(self.MEDIEN_TYPEN)))},
+                          % (name, ", ".join(sorted(erlaubt)))},
                 HTTPStatus.BAD_REQUEST)
         length = int(self.headers.get("Content-Length", "0"))
         if length <= 0:
@@ -1317,7 +1330,7 @@ class Handler(BaseHTTPRequestHandler):
                 {"error": "zu gross: %.0f MB (max %d MB)"
                           % (length / 1048576.0, self.MEDIEN_MAX // 1048576)},
                 HTTPStatus.BAD_REQUEST)
-        d = os.path.join(CFG["workdir"], "medien")
+        d = os.path.join(CFG["workdir"], ziel_art)
         os.makedirs(d, exist_ok=True)
         stamm, endung = os.path.splitext(name)
         ziel = os.path.join(d, name)
@@ -1339,11 +1352,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json({"error": "Upload abgebrochen"},
                                    HTTPStatus.INTERNAL_SERVER_ERROR)
         os.replace(tmp, ziel)
-        print("[cockpit] Medien importiert: %s (%.1f MB)"
-              % (os.path.basename(ziel), length / 1048576.0), flush=True)
-        return self._send_json({"ok": True, "name": os.path.basename(ziel),
-                                "file": ziel, "url": "/medien/" + os.path.basename(ziel),
-                                "bytes": length})
+        print("[cockpit] %s importiert: %s (%.1f MB)"
+              % (ziel_art, os.path.basename(ziel), length / 1048576.0), flush=True)
+        antwort = {"ok": True, "name": os.path.basename(ziel), "file": ziel,
+                   "url": "/%s/%s" % (ziel_art, os.path.basename(ziel)),
+                   "bytes": length, "ziel": ziel_art}
+        if ziel_art == "firstframe":
+            antwort["kandidaten"] = self.first_frame_kandidaten()
+        return self._send_json(antwort)
 
     def serve_nach_typ(self, p):
         """Video ueber serve_media (Range noetig), Bilder direkt.
@@ -1528,7 +1544,7 @@ class Handler(BaseHTTPRequestHandler):
     def broll_auftrag(self):
         """B-Roll-Auftrag aus dem FINALEN Schnitt (03.09.).
 
-        der Ablauf: schneiden, von Hand nachkorrigieren, dann diesen
+        des Nutzers Ablauf: schneiden, von Hand nachkorrigieren, dann diesen
         Knopf. Erst der Klick erklaert die Clips fuer final — ab da steht
         fest, wie viele Clips es gibt und wie lang jeder ist. Ein B-Roll pro
         Body-Clip; Hook (First-Frame-Image) und CTA (nur Text) bleiben frei.
@@ -1686,6 +1702,42 @@ class Handler(BaseHTTPRequestHandler):
         sys.stderr.write("[cockpit] RERENDER gestartet (pid %d)\n" % proc.pid)
         self._send_json({"status": "started", "pid": proc.pid})
 
+    def export_final(self):
+        """Fertiges Video herausrendern (04.09.): 1080x1920, 60 fps, hohe Qualitaet.
+
+        Gleicher Renderweg wie die Vorschau, nur mit --export: langsameres
+        Preset, feineres CRF, faststart fuers Hochladen — und ein eigenes Ziel,
+        damit der Arbeits-Proxy bleibt, wo er ist.
+        """
+        length = int(self.headers.get("Content-Length", "0"))
+        if length:
+            self.rfile.read(length)
+        if not os.path.exists(os.path.join(CFG["workdir"], "sf_layout.json")):
+            return self._send_json({"error": "Export gibt es nur fuer Shortform-Projekte"},
+                                   HTTPStatus.BAD_REQUEST)
+        if not CFG.get("src_video") or not os.path.exists(CFG["src_video"]):
+            return self._send_json({"error": "src_video fehlt"}, HTTPStatus.BAD_REQUEST)
+        name = os.path.basename(CFG["workdir"].rstrip("/")) or "export"
+        ziel = os.path.join(CFG["workdir"], "export", f"{name}_1080p60.mp4")
+        with JOB_LOCK:
+            job = CFG.get("job")
+            if job and job["proc"].poll() is None:
+                return self._send_json({"error": "Es laeuft schon ein Render"},
+                                       HTTPStatus.CONFLICT)
+            if job and job.get("logf"):
+                try:
+                    job["logf"].close()
+                except OSError:
+                    pass
+            log_path = os.path.join(CFG["workdir"], "export.log")
+            logf = open(log_path, "w", encoding="utf-8")
+            cmd = [sys.executable, os.path.join(HERE, "rebuild_sf.py"),
+                   CFG["workdir"], CFG["src_video"], "--export", "--out", ziel]
+            proc = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT)
+            CFG["job"] = {"proc": proc, "log": log_path, "logf": logf, "export": ziel}
+        print("[cockpit] EXPORT gestartet (pid %d) -> %s" % (proc.pid, ziel), flush=True)
+        return self._send_json({"status": "started", "pid": proc.pid, "ziel": ziel})
+
     def render_status(self):
         with JOB_LOCK:
             job = CFG.get("job")
@@ -1706,8 +1758,14 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 pass
             job["logf"] = None
-        self._send_json({"status": "done" if code == 0 else "failed",
-                         "exit": code, "log": tail})
+        antwort = {"status": "done" if code == 0 else "failed",
+                   "exit": code, "log": tail}
+        if job.get("export"):
+            antwort["export"] = job["export"]
+            antwort["export_da"] = os.path.exists(job["export"])
+            if antwort["export_da"]:
+                antwort["export_mb"] = round(os.path.getsize(job["export"]) / 1048576.0, 1)
+        self._send_json(antwort)
 
 
 def main():

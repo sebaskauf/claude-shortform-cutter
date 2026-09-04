@@ -9,7 +9,7 @@ sich im Container als 60fps deklarieren (QuickTime-Fusionen!), erzeugte das:
   - 25 fehlende Bilder (27357 statt 27382)
   - PTS-Raster-Abweichung 1374 ms  -> verify_render FAIL
 Ein Player, der die deklarierte Rate statt der echten Zeitstempel nimmt, spielt
-Bild und Ton dann ueber 15 min um ~1,4 s versetzt ab. Genau das hat Sebastian
+Bild und Ton dann ueber 15 min um ~1,4 s versetzt ab. Genau das hat der Nutzer
 an V6 gesehen ("Der Ton war KOMPLETT versetzt vom Video").
 
 Dieselbe Klasse Fehler war fuer rerender.py schon am 15.08. gefixt worden

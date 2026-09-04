@@ -216,8 +216,18 @@
   .clip.fail::after { content: ""; position: absolute; top: 0; right: 0; width: 0; height: 0; border-top: 12px solid var(--cut); border-left: 12px solid transparent; }
   .clip .clip-label { position: absolute; top: 3px; left: 6px; right: 6px; font-size: 11px; color: #cfd6e4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; text-shadow: 0 1px 2px rgba(0,0,0,.6); }
   .clip canvas { position: absolute; left: 0; bottom: 0; width: 100%; height: 60%; display: block; }
-  .clip .handle { position: absolute; top: 0; bottom: 0; width: 8px; cursor: ew-resize; background: transparent; }
-  .clip .handle:hover, .clip .handle.dragging { background: rgba(249,115,22,.5); }
+  /* Trimm-Griffe (04.09.): waren 8px breit und komplett unsichtbar — man
+     musste ein schmales Band blind treffen. Jetzt 11px, dezent sichtbar am
+     Clip-Rand, beim Ueberfahren deutlich, wie in CapCut. */
+  .clip .handle { position: absolute; top: 0; bottom: 0; width: 11px; cursor: ew-resize;
+    background: linear-gradient(90deg, rgba(249,115,22,.28), rgba(249,115,22,.05)); }
+  .clip .handle.r { background: linear-gradient(270deg, rgba(249,115,22,.28), rgba(249,115,22,.05)); }
+  .clip .handle::after { content:""; position:absolute; top:50%; transform:translateY(-50%);
+    left:3px; width:3px; height:22px; border-radius:2px; background:rgba(255,255,255,.55); }
+  .clip .handle.r::after { left:auto; right:3px; }
+  .clip:hover .handle { background: rgba(249,115,22,.45); }
+  .clip .handle:hover, .clip .handle.dragging { background: rgba(249,115,22,.8); }
+  .clip .handle:hover::after, .clip .handle.dragging::after { background:#fff; height:28px; }
   .clip .handle.l { left: 0; } .clip .handle.r { right: 0; }
   .clip .split-mark { position: absolute; top: 0; bottom: 0; width: 2px; background: repeating-linear-gradient(0deg,#f9731699 0 4px,transparent 4px 8px); pointer-events: none; }
   .clip .gainline { position: absolute; left: 0; right: 0; height: 3px; margin-top: -1px; background: rgba(255,255,255,.55); cursor: ns-resize; z-index: 2; }
@@ -333,6 +343,14 @@
   .toast.show { opacity: 1; }
 
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+/* FINDER-DROP (04.09.) */
+#dropOverlay{position:fixed;inset:0;z-index:9000;display:none;pointer-events:none;
+  align-items:center;justify-content:center;font-size:20px;font-weight:600;
+  color:#fff;text-align:center;padding:24px;background:rgba(10,12,16,.72);
+  border:4px dashed #ff8a3d;text-shadow:0 2px 12px rgba(0,0,0,.9)}
+#dropOverlay.an{display:flex}
+#dropOverlay.ff{border-color:#4da3ff}
+.ffGrid.dropZiel{outline:3px dashed #4da3ff;outline-offset:4px;border-radius:8px}
 </style>
 
 <div class="app">
@@ -344,10 +362,18 @@
           title="Persistente Agent-Sessions: laufen in tmux weiter, auch wenn du das Projekt wechselst"></span>
     <span class="save-state" id="renderState" role="status" aria-live="polite"></span>
     <span class="save-state" id="saveState" role="status" aria-live="polite">bereit</span>
+    <span id="volWrap" style="display:none;align-items:center;gap:6px;margin-right:4px"
+          title="Lautstaerke des fertigen Videos. 0 dB = der Standard, auf den jedes Shortform automatisch gebracht wird. Nach links wird es leiser.">
+      <span style="opacity:.75">&#128266;</span>
+      <input id="volRange" type="range" min="-12" max="0" step="1" value="0" style="width:78px" aria-label="Lautstärke in dB">
+      <span id="volLabel" class="mono" style="min-width:38px;opacity:.8">0 dB</span>
+    </span>
     <button id="btnDrawer" class="ghost" aria-label="Text-Ansicht öffnen oder schließen" aria-expanded="false">Text-Ansicht</button>
     <button id="btnUndo" aria-label="Letzte Änderung rückgängig (Cmd+Z)">↶ Undo</button>
     <button id="btnSave" class="primary" aria-label="Overrides speichern (Cmd+S)">Speichern</button>
     <button id="btnRerender" aria-label="Proxy neu rendern" aria-busy="false">Neu rendern</button>
+    <button id="btnExport" style="display:none" aria-label="Fertiges Video exportieren"
+            title="Fertiges Video herausrendern: 1080x1920, 60 fps, hohe Qualitaet. Liegt danach in export/ und wird im Finder gezeigt.">&#11015; Exportieren</button>
   </header>
 
   <div class="stage">
@@ -564,7 +590,7 @@
         inS:seg.in+inN, outS:seg.out+outN, segIn:seg.in, segOut:seg.out,
         label:(seg.first_word||"")+" …", hasLeft:true, hasRight:true,
         gain:+(gains[i]||0), fail:isJointFail(i), jcut:0,
-        // Sebastians Standard-Look fuer Talking-Head-Clips (SCHNITT-STIL 2):
+        // des Nutzers Standard-Look fuer Talking-Head-Clips (SCHNITT-STIL 2):
         // Saettigung +5 / Belichtung -5, gemessen gegen seinen CapCut-Export.
         // Nur im Shortform-Modus; Longform bleibt neutral. B-Roll bekommt ihn nie.
         sat: sfMode ? 5 : 0, exp: sfMode ? -5 : 0 });
@@ -771,7 +797,7 @@
   //  "free":   generierte Grafik — wird NIE mitgeschnitten, volle Laenge bleibt,
   //            b.anchor (Raw-Sekunde) laesst sie mit ihrer Sprechstelle wandern.
   //  ohne kind (Legacy, z.B. saas7): exakt bisheriges Verhalten (Output-fix).
-  // SELBSTHEILUNG (27.07., nach Sebastians Bug-Report): Slots OHNE kind werden
+  // SELBSTHEILUNG (27.07., nach des Nutzers Bug-Report): Slots OHNE kind werden
   // beim Laden automatisch klassifiziert — Datei gehoert zu einer Sync-Quelle
   // => "screen" (klebt), sonst => "free" (Grafik). Der aktuelle sichtbare
   // Startpunkt wird dabei EXAKT erhalten (shift/anchor werden so berechnet).
@@ -859,7 +885,7 @@
   }
   // CLIP-GEBUNDENE SLOTS (Shortform, 03.09.): Ein B-Roll gehoert zu genau
   // einem Clip und fuellt ihn exakt. Start UND Ende kommen deshalb immer aus
-  // dem Clip, nie aus gespeicherten Zeiten. Korrigiert Sebastian den Schnitt
+  // dem Clip, nie aus gespeicherten Zeiten. Korrigiert der Nutzer den Schnitt
   // nach, wandert der Slot nicht nur mit — er wird auch wieder genau so lang
   // wie sein Clip, und speed:"fit" rechnet das Tempo von selbst neu.
   // Bindung ueber die stabile Clip-ID, Index nur als Rueckfall.
@@ -1314,7 +1340,7 @@
   // Obsidian 1.12.7): (a) currentTime von Audio-Elementen ist nur noch grob
   // quantisiert -> der err-Regelkreis feuerte 288 echte Seeks/60s, jeder riss
   // den Audio-Output-Anlauf ab, die Uhr kam nur mit 4% der Echtzeit voran =
-  // Sebastians "super laggy". (b) Selbst event-getrieben blieb ein echtes
+  // des Nutzers "super laggy". (b) Selbst event-getrieben blieb ein echtes
   // Raten-Defizit des Pitch-Stretchers bei 2x/3x (~2-3%, +300ms Drift pro
   // Clip, an Chunk-Kanten vermessen). Das Hauptvideo hat beide Probleme
   // konstruktiv nicht.
@@ -1548,7 +1574,7 @@
     var wrap=canvasBox&&canvasBox.parentElement; if(!wrap) return;
     var W=wrap.clientWidth, H=wrap.clientHeight; if(!W||!H) return;
     // SF-Modus (01.09.): Reel ist 9:16 -> Box 9:16, sonst ueberlappt die
-    // Reel-Komposition statt zu schrumpfen (Sebastians CapCut-Vergleich).
+    // Reel-Komposition statt zu schrumpfen (des Nutzers CapCut-Vergleich).
     if(typeof sfMode!=="undefined" && sfMode){
       var h=Math.min(H, W*16/9);
       canvasBox.style.width=(h*9/16)+"px"; canvasBox.style.height=h+"px";
@@ -1843,7 +1869,7 @@
         // ABSOLUTE Wort-Zeiten (CapCut-Prinzip, captions_from_words.py):
         // Highlight folgt exakt der Sprache. Das alte Umskalieren aufs
         // Seitenfenster liess jedes Wort proportional driften, sobald das
-        // Fenster nicht exakt sass — Sebastians "nicht am exakten Moment".
+        // Fenster nicht exakt sass — des Nutzers "nicht am exakten Moment".
         st.forEach(function(w){ out.push([Math.max(c.start,w.t0),
                                           Math.min(c.end,Math.max(w.t0+0.03,w.t1))]); });
       } else {
@@ -1976,6 +2002,59 @@
     if(medDrag && medDrag.moved){ markDirty(); updateInspector(); }
     medDrag=null;
   }
+  // ---------- Hauptvideo im Player verschieben (04.09.) ----------
+  // der Nutzer wollte es so einfach wie einen Textkasten: anfassen, ziehen,
+  // fertig. Kein Zoom, keine Skalierung, kein Rahmen. Sind mehrere Clips
+  // markiert, wandern alle um dasselbe Delta mit — einer gezogen, alle bewegt.
+  var vidDrag=null;
+  function vidDragZiele(){
+    var c=clips[curClipIdx]; if(!c) return [];
+    return (selectedIds.has(c.id) && selectedIds.size>1) ? selectedClips() : [c];
+  }
+  function setupVideoDrag(){
+    var box=document.querySelector(".canvas-box"); if(!box) return;
+    box.addEventListener("pointerdown", function(ev){
+      if(!sfMode || ev.button!==0) return;
+      // Text, Medien und Bedienelemente behalten Vorrang
+      if(ev.target.closest("#capEdit,#medEdit,.clLine,.medHandle,.capHandle,button,input,select,textarea")) return;
+      var ziele=vidDragZiele();
+      if(!ziele.length || !capBoxRect) return;
+      vidDrag={ x0:ev.clientX, y0:ev.clientY, moved:false, undone:false,
+                start:ziele.map(function(c){ return {c:c, ox:+(c.ox||0), oy:+(c.oy||0)}; }) };
+      window.addEventListener("pointermove", onVidMove);
+      window.addEventListener("pointerup", onVidUp);
+      // kein preventDefault hier: ein einfacher Klick soll wirken wie bisher
+    });
+  }
+  function onVidMove(ev){
+    if(!vidDrag || !capBoxRect) return;
+    var dx=ev.clientX-vidDrag.x0, dy=ev.clientY-vidDrag.y0;
+    if(!vidDrag.moved && Math.hypot(dx,dy)<3) return;
+    if(!vidDrag.undone){ pushUndo(); vidDrag.undone=true; }
+    vidDrag.moved=true;
+    ev.preventDefault();
+    // Bildschirmpixel -> Prozent der Bildflaeche. capBoxRect.f ist die Skala
+    // zwischen Design-Raum (1080x1920) und dargestellter Groesse.
+    var pctX=dx/(1080*capBoxRect.f)*100, pctY=dy/(1920*capBoxRect.f)*100;
+    var gr=lookGrenzen("ox");
+    vidDrag.start.forEach(function(s){
+      s.c.ox=+Math.max(gr.mn, Math.min(gr.mx, s.ox+pctX)).toFixed(2);
+      s.c.oy=+Math.max(gr.mn, Math.min(gr.mx, s.oy+pctY)).toFixed(2);
+    });
+    _geoMain=null; _geoSb=null; updateClipLook();
+  }
+  function onVidUp(){
+    window.removeEventListener("pointermove", onVidMove);
+    window.removeEventListener("pointerup", onVidUp);
+    if(vidDrag && vidDrag.moved){
+      var z=vidDrag.start, c=z[0].c;
+      markDirty(); updateInspector();
+      showToast((z.length>1 ? z.length+" Clips verschoben: " : "Verschoben: ")+
+                (+c.ox).toFixed(1)+" / "+(+c.oy).toFixed(1)+" %");
+    }
+    vidDrag=null;
+  }
+
   // ---------- capEdit: Text im Player anfassen (Move / Skalieren / Tippen) ----------
   var capEditDrag=null;
   function positionCapEdit(gi){
@@ -2077,6 +2156,7 @@
   }
   setTimeout(setupCapEdit, 80);
   setTimeout(setupMedEdit, 80);
+  setTimeout(setupVideoDrag, 80);
   (function capLoop(){ try{ updateCapLive(); }catch(e){} requestAnimationFrame(capLoop); })();
   function renderCapInspector(i){
     var c=captions[i]; var body=document.getElementById("inspBody");
@@ -2183,7 +2263,7 @@
     // DRIFT-SCHRANKE (30.08.): Die alten Schwellen (0.6x/0.35x Rate = bis 1.8s!)
     // stammen aus der Long-GOP-Aera (Seek 250ms+, Sturm-Gefahr). Unter
     // Chromium 142 laeuft der frei laufende Layer bei 2x/3x messbar davon
-    // (V6: +120 -> +560ms binnen einer Minute — Sebastians "je laenger, desto
+    // (V6: +120 -> +560ms binnen einer Minute — des Nutzers "je laenger, desto
     // schlimmer, ueber eine Sekunde"). Heute spielt der Layer das g=15-Intra:
     // Seeks kosten ~30ms und sind auf Screen-Content unsichtbar. Deshalb:
     // feste 0.25s-Schranke (nicht rate-skaliert) + kleiner Vorhalt; die
@@ -2219,10 +2299,16 @@
   // (rerender.build_look_filter). Temp/Tint via feColorMatrix (CSS kann
   // keinen Weissabgleich); Schaerfe/Highlights/Schatten wirken NUR im
   // Render — steht so im Tooltip der Regler.
-  var LOOK_KEYS=["exp","bri","con","sat","tmp","tnt","shp","hig","sha"];
+  var LOOK_KEYS=["exp","bri","con","sat","tmp","tnt","shp","hig","sha","ox","oy"];
   var LOOK_LABEL={exp:"Belichtung",bri:"Helligkeit",con:"Kontrast",sat:"Sättigung",
-                  tmp:"Temperatur",tnt:"Tint",shp:"Schärfe",hig:"Highlights",sha:"Schatten"};
-  // FIRST-FRAME-AUSWAHL (03.09.): Der erste Clip traegt Sebastians Visual Hook
+                  tmp:"Temperatur",tnt:"Tint",shp:"Schärfe",hig:"Highlights",sha:"Schatten",
+                  ox:"Position ↔", oy:"Position ↕"};
+  // Grenzen je Regler an EINER Stelle — Anzeige und Eingabe muessen dieselben nutzen.
+  function lookGrenzen(k){
+    if(k==="shp") return {mn:0, mx:100};
+    return {mn:-50, mx:50};
+  }
+  // FIRST-FRAME-AUSWAHL (03.09.): Der erste Clip traegt des Nutzers Visual Hook
   // (Higgsfield-Bild als Overlay, siehe sf_layout.hook.hf). Die Kandidaten
   // liegen in <workdir>/firstframe/ — hier als Kacheln, ein Klick waehlt.
   var firstFrames=[];
@@ -2280,12 +2366,24 @@
     }
     return f.join(" ");
   }
-  var _lookMain="", _lookSb="";
+  // BILDVERSATZ (04.09.): dieselbe Formel wie rerender.build_geo_filter —
+  // translateY zuerst notiert heisst: erst skalieren, dann um oy% der
+  // Elementhoehe schieben. Deckungsgleich mit scale+crop im Render.
+  function clipGeoCss(c){
+    var ox=+((c&&c.ox)||0), oy=+((c&&c.oy)||0);
+    if(!ox && !oy) return "";
+    return "translate("+ox.toFixed(2)+"%,"+oy.toFixed(2)+"%)";
+  }
+  var _lookMain="", _lookSb="", _geoMain="", _geoSb="";
+  var audioGain=0;          // dB unter dem Standardpegel, 0 = Standard
   function updateClipLook(){
     var f1=clipLookCss(clips[curClipIdx], 0);
     var f2=clipLookCss(clips[curClipIdx+1], 1);
     if(f1!==_lookMain){ video.style.filter=f1; _lookMain=f1; }
     if(f2!==_lookSb){ videoSb.style.filter=f2; _lookSb=f2; }
+    var g1=clipGeoCss(clips[curClipIdx]), g2=clipGeoCss(clips[curClipIdx+1]);
+    if(g1!==_geoMain){ video.style.transform=g1; _geoMain=g1; }
+    if(g2!==_geoSb){ videoSb.style.transform=g2; _geoSb=g2; }
   }
   var playTick=0;
   function playLoop(){
@@ -2506,18 +2604,21 @@
   var LOOK_SECTIONS=[
     ["Farbe", ["tmp","tnt","sat"]],
     ["Licht", ["exp","con","hig","sha","bri"]],
-    ["Detail", ["shp"]]
+    ["Detail", ["shp"]],
+    ["Bild", ["ox","oy"]]
   ];
   var LOOK_LABEL_CC={tmp:"Temp",tnt:"Tint",sat:"Sättigung",exp:"Belichtung",con:"Kontrast",
-                     hig:"Highlight",sha:"Schatten",bri:"Helligkeit",shp:"Schärfe"};
+                     hig:"Highlight",sha:"Schatten",bri:"Helligkeit",shp:"Schärfe",
+                     ox:"Position ↔", oy:"Position ↕"};
   function lookGridHtml(src){
     var noPrev={shp:1,hig:1,sha:1};
     var html='<div class="gain-wrap"><label>Anpassen</label>';
     LOOK_SECTIONS.forEach(function(sec){
       html+='<div class="lk-sec">'+sec[0]+'</div>';
       sec[1].forEach(function(k){
-        var mn=(k==="shp")?0:-50, mx=(k==="shp")?100:50, v=+(src[k]||0);
-        var tip=noPrev[k]?' title="wirkt beim Neu rendern (keine Live-Vorschau)"':"";
+        var gr=lookGrenzen(k), mn=gr.mn, mx=gr.mx, v=+(src[k]||0);
+        var tip=noPrev[k]?' title="wirkt beim Neu rendern (keine Live-Vorschau)"':
+                ((k==="ox"||k==="oy")?' title="Bild verschieben. Einfacher: im Player direkt anfassen und ziehen. Doppelklick = zurueck auf 0."':"");
         html+='<div class="lk-row'+(noPrev[k]?' noprev':'')+'"'+tip+'>'+
           '<span>'+LOOK_LABEL_CC[k]+(noPrev[k]?' ·R':'')+'</span>'+
           '<input class="lk-range lk-'+k+'" data-look="'+k+'" type="range" min="'+mn+'" max="'+mx+'" step="1" value="'+v+'">'+
@@ -2534,11 +2635,11 @@
     if(!ranges.length) return;
     var undone=false;
     function setVal(k, v){
-      var mn=(k==="shp")?0:-50, mx=(k==="shp")?100:50;
+      var gr=lookGrenzen(k), mn=gr.mn, mx=gr.mx;
       v=Math.max(mn,Math.min(mx,Math.round(+v||0)));
       targets.forEach(function(c){ c[k]=v; });
       document.querySelectorAll('[data-look="'+k+'"]').forEach(function(el){ if(+el.value!==v) el.value=v; });
-      _lookMain=null; _lookSb=null; updateClipLook(); markDirty();
+      _lookMain=null; _lookSb=null; _geoMain=null; _geoSb=null; updateClipLook(); markDirty();
     }
     function onFirst(){ if(!undone){ pushUndo(); undone=true; } }
     ranges.forEach(function(r){
@@ -2555,7 +2656,8 @@
     if(rst) rst.addEventListener("click", function(){
       pushUndo();
       targets.forEach(function(c){ LOOK_KEYS.forEach(function(k){ c[k]=0; }); });
-      _lookMain=null; _lookSb=null; updateClipLook(); markDirty(); updateInspector();
+      _lookMain=null; _lookSb=null; _geoMain=null; _geoSb=null;
+      updateClipLook(); markDirty(); updateInspector();
     });
   }
   function updateInspector(){
@@ -2676,7 +2778,7 @@
     if(!datei) return;
     var mb=(datei.size/1048576).toFixed(1);
     showToast("Importiere "+datei.name+" ("+mb+" MB) …");
-    fetch("/api/medien_upload",{ method:"POST",
+    return fetch("/api/medien_upload",{ method:"POST",
         headers:{"X-Dateiname":encodeURIComponent(datei.name).replace(/%20/g," ")},
         body:datei })
       .then(function(r){ return r.json(); })
@@ -2692,6 +2794,118 @@
         showToast("Importiert: "+d.name+" — am Playhead abgelegt, im Player verschiebbar");
       })
       .catch(function(e){ showToast("Import fehlgeschlagen: "+e.message); });
+  }
+  // FINDER-DROP (04.09.): Datei aus dem Finder ins Cockpit ziehen. Zwei Ziele,
+  // je nachdem wo losgelassen wird:
+  //   ueber den First-Frame-Kacheln -> neue Hook-Variante, sofort gesetzt
+  //   sonst                         -> Medium am Playhead auf die Timeline
+  // Nur in sfMode aktiv: das Longform-Cockpit bleibt unangetastet.
+  var dropOverlay=null, dropTiefe=0;
+  function dropZiel(e){
+    var el=e.target;
+    while(el && el!==document.body){
+      if(el.classList && (el.classList.contains("ffGrid")||el.classList.contains("ffTile"))) return "firstframe";
+      el=el.parentNode;
+    }
+    return "medien";
+  }
+  function dropOverlayZeigen(art){
+    if(!dropOverlay){
+      dropOverlay=document.createElement("div");
+      dropOverlay.id="dropOverlay";
+      document.body.appendChild(dropOverlay);
+    }
+    dropOverlay.textContent = art==="firstframe"
+      ? "Loslassen: als First-Frame-Bild übernehmen und setzen"
+      : "Loslassen: am Playhead auf die Timeline legen";
+    dropOverlay.className = "an" + (art==="firstframe" ? " ff" : "");
+    var g=document.querySelector(".ffGrid");
+    if(g) g.classList.toggle("dropZiel", art==="firstframe");
+  }
+  function dropOverlayWeg(){
+    dropTiefe=0;
+    if(dropOverlay) dropOverlay.className="";
+    var g=document.querySelector(".ffGrid");
+    if(g) g.classList.remove("dropZiel");
+  }
+  function dropErlaubt(f, art){
+    var n=(f.name||"").toLowerCase();
+    return art==="firstframe" ? /\.(png|jpe?g|webp)$/.test(n)
+                              : /\.(png|jpe?g|webp|gif|mp4|mov|webm)$/.test(n);
+  }
+  function firstFrameImport(datei){
+    showToast("Übernehme "+datei.name+" als First Frame …");
+    return fetch("/api/medien_upload",{ method:"POST",
+        headers:{"X-Dateiname":encodeURIComponent(datei.name).replace(/%20/g," "),
+                 "X-Ziel":"firstframe"},
+        body:datei })
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if(d.error) throw new Error(d.error);
+        firstFrames=d.kandidaten||firstFrames;
+        // Wer ein Bild reinzieht, will es benutzen — also gleich setzen.
+        return fetch("/api/first_frame",{method:"POST",
+                     headers:{"Content-Type":"application/json"},
+                     body:JSON.stringify({name:d.name})})
+          .then(function(r){ return r.json(); })
+          .then(function(a){
+            if(a.error) throw new Error(a.error);
+            firstFrames=a.kandidaten||firstFrames;
+            if(clips.length) selectClip(0);
+            updateInspector();
+            showToast("First Frame gesetzt: "+d.name+" — beim nächsten Rendern im Video");
+          });
+      })
+      .catch(function(e){ showToast("First Frame fehlgeschlagen: "+e.message); });
+  }
+  function dropKette(dateien, art){
+    var i=0;
+    (function weiter(){
+      if(i>=dateien.length) return;
+      var f=dateien[i++];
+      var p = art==="firstframe" ? firstFrameImport(f) : medienImport(f);
+      (p && p.then ? p : Promise.resolve()).then(weiter, weiter);
+    })();
+  }
+  function dropAufbauen(){
+    ["dragenter","dragover"].forEach(function(ev){
+      document.addEventListener(ev, function(e){
+        if(!sfMode || !e.dataTransfer) return;
+        var t=e.dataTransfer.types||[];
+        if(Array.prototype.indexOf.call(t,"Files")<0) return;
+        e.preventDefault();
+        try{ e.dataTransfer.dropEffect="copy"; }catch(_){}
+        if(ev==="dragenter") dropTiefe++;
+        dropOverlayZeigen(dropZiel(e));
+      }, false);
+    });
+    document.addEventListener("dragleave", function(e){
+      if(!sfMode) return;
+      dropTiefe--; if(dropTiefe<=0) dropOverlayWeg();
+    }, false);
+    // Verlaesst die Maus das Fenster, kommt kein dragleave mehr — sonst haengt
+    // das Overlay fuer immer im Bild.
+    window.addEventListener("dragend", dropOverlayWeg, false);
+    window.addEventListener("blur", dropOverlayWeg, false);
+    document.addEventListener("drop", function(e){
+      if(!sfMode) return;
+      var dt=e.dataTransfer;
+      if(!dt || !dt.files || !dt.files.length) return;
+      e.preventDefault();
+      var art=dropZiel(e);
+      dropOverlayWeg();
+      var alle=Array.prototype.slice.call(dt.files);
+      var gut=alle.filter(function(f){ return dropErlaubt(f, art); });
+      if(!gut.length){
+        showToast(art==="firstframe"
+          ? "First Frame braucht ein Bild: PNG, JPG oder WebP"
+          : "Kein unterstütztes Format dabei (Bild oder Video)");
+        return;
+      }
+      if(gut.length<alle.length)
+        showToast((alle.length-gut.length)+" Datei(en) übersprungen — Format passt nicht");
+      dropKette(gut, art);
+    }, false);
   }
   function deleteBroll(i){ deleteBrolls([i]); }
   function deleteBrolls(idxs){
@@ -2771,7 +2985,7 @@
   // Arbeitet direkt auf clips — funktioniert dadurch auch auf Split-Hälften beliebig oft.
   function quickCutSlots(mode, t){
     // Slot(s) selektiert -> Shortcuts wirken NUR aufs B-Roll, NIE auf den
-    // Haupt-Clip darunter (Sebastian-Regel, 22.07.).
+    // Haupt-Clip darunter (der Nutzer-Regel, 22.07.).
     var affected=[];
     selectedBrolls.forEach(function(i){
       var b=broll[i];
@@ -2805,6 +3019,41 @@
   // Kopiert die markierten Slots (relative Abstaende bleiben erhalten) und
   // fuegt sie an der Maus-Linie (Vorrang) bzw. am Playhead als FREIE Slots ein.
   var brollClipboard = null;
+  // VIDEO-CLIPS KOPIEREN (04.09.): Ein Clip ist ein Ausschnitt aus der Quelle.
+  // Eine Kopie zeigt auf denselben Ausschnitt, bekommt aber eine eigene ID —
+  // sonst verwechseln Register und B-Roll-Bindung die beiden.
+  var clipClipboard=null;
+  function copyClips(){
+    var sel=selectedClips();
+    if(!sel.length){ showToast("Erst einen Clip auswaehlen"); return; }
+    clipClipboard=sel.map(packClip);
+    showToast(sel.length+" Clip"+(sel.length>1?"s":"")+" kopiert — Cmd+V fuegt hinter dem ausgewaehlten Clip ein");
+  }
+  function pasteClips(){
+    if(!clipClipboard || !clipClipboard.length){
+      showToast("Zwischenablage leer — erst einen Clip mit Cmd+C kopieren"); return;
+    }
+    pushUndo();
+    // Einfuegepunkt: hinter dem zuletzt ausgewaehlten Clip, sonst ans Ende
+    var sel=selectedClips();
+    var pos=clips.length;
+    if(sel.length){
+      var letzte=sel[sel.length-1];
+      for(var i=0;i<clips.length;i++) if(clips[i]===letzte){ pos=i+1; break; }
+    }
+    var neueIds=[];
+    var kopien=clipClipboard.map(function(o){
+      var c=unpackClip(o);
+      c.id=newSplitIdIn(clips, c.baseId||c.id);   // eigene ID, sonst Kollision
+      c.seamLeft=true;
+      neueIds.push(c.id);
+      return c;
+    });
+    clips.splice.apply(clips, [pos, 0].concat(kopien));
+    selectedIds=new Set(neueIds);
+    renderTimeline(); markDirty(); updateInspector();
+    showToast(kopien.length+" Clip"+(kopien.length>1?"s":"")+" eingefuegt — an den Griffen weiter trimmen");
+  }
   function copyBrolls(){
     if(!selectedBrolls.size){ showToast("Erst B-Roll-Slot(s) markieren (Klick oder Auswahlbox)"); return; }
     var items=Array.from(selectedBrolls).map(function(i){ return broll[i]; }).filter(Boolean)
@@ -3085,18 +3334,40 @@
   }
   function onDragMove(e){
     if(!drag) return;
-    var dpx=e.clientX-drag.startX; var ds=dpx/pxPerSec;
+    var dpx=e.clientX-drag.startX;
+    // FEINMODUS (04.09.): Beim ersten Clip reicht die linke Grenze bis Sekunde 0
+    // der Quelldatei — bei einem Hook aus Minute vier sind das hunderte Sekunden
+    // Spielraum, und ein Pixel entspricht dann zig Millisekunden. Mit gedrueckter
+    // Shift-Taste wird zehnmal feiner gezogen.
+    var ds=(dpx/pxPerSec)*(e.shiftKey?0.1:1);
     if(drag.type==="trim"){
       var c=drag.clip;
       drag.moved=true;
       var ci=clips.indexOf(c);
-      var prevOut=(ci>0)?clips[ci-1].outS:0;                                   // Quell-Nachbarn:
-      var nextIn=(ci>=0&&ci<clips.length-1)?clips[ci+1].inS:Infinity;          // nie hineinziehen
-      if(drag.edge==="in"){ c.inS=Math.max(prevOut+0.01, Math.min(drag.orig+ds, c.outS-0.05)); }
-      else { c.outS=Math.min(nextIn-0.01, Math.max(drag.orig+ds, c.inS+0.05)); }
+      // GRENZEN NUR BEI ECHTEN QUELL-NACHBARN (04.09.):
+      // Frueher galt der Timeline-Nachbar automatisch als Grenze in der
+      // Quelldatei. Das stimmt nur, solange die Clips in Quellreihenfolge
+      // liegen. Nach Kopieren oder Verschieben steht neben einem Hook aus
+      // Sekunde 275 plötzlich ein Abschnitt aus Sekunde 589 — dessen outS
+      // wurde zur Untergrenze und der Clip sprang um 314 Sekunden nach vorn,
+      // kollabierte und war nicht mehr zu greifen (des Nutzers "+380.000 ms").
+      // Ein Nachbar begrenzt jetzt nur noch, wenn er in der QUELLE
+      // tatsaechlich davor bzw. dahinter liegt.
+      var prevOut=0;
+      if(ci>0 && clips[ci-1].outS <= c.inS+0.001) prevOut=clips[ci-1].outS;
+      var nextIn=Infinity;
+      if(ci>=0 && ci<clips.length-1 && clips[ci+1].inS >= c.outS-0.001) nextIn=clips[ci+1].inS;
+      // Mindestlaenge 0,15s statt 0,05s: darunter war der Clip nur wenige
+      // Pixel breit, der Griff nicht mehr treffbar und der Clip unbedienbar —
+      // genau die Sackgasse, aus der nur noch Undo half.
+      var MIN=0.15;
+      if(drag.edge==="in"){ c.inS=Math.max(prevOut+0.01, Math.min(drag.orig+ds, c.outS-MIN)); }
+      else { c.outS=Math.min(nextIn-0.01, Math.max(drag.orig+ds, c.inS+MIN)); }
       recomputeOffsets(); positionClips();
       var deltaMs=Math.round(((drag.edge==="in"?c.inS:c.outS)-drag.orig)*1000);
-      showTooltip(e.clientX, e.clientY, (deltaMs>0?"+":"")+deltaMs+" ms");
+      var dauer=(c.outS-c.inS);
+      showTooltip(e.clientX, e.clientY,
+        (deltaMs>0?"+":"")+deltaMs+" ms  ·  Clip "+dauer.toFixed(2)+"s"+(e.shiftKey?"  ·  fein":""));
     } else if(drag.type==="move"){
       if(!drag.moved && Math.abs(dpx)<5) return;      // Klick bleibt Klick
       if(!drag.moved){
@@ -3404,6 +3675,7 @@
       if(sfMode){ o.sat=+(c.sat||0); o.exp=+(c.exp||0); }
       return o;
     }),
+    audio:{gain_db:audioGain},
     nudges:nudges, gains:gains, broll:broll, broll_sync_off:[...brollSyncOff],
     broll_sync_holes:syncHoles, broll_sync_converted:[...syncConverted],
     extra_cut_word_ids:[...extraCut], uncut_word_ids:[...uncut],
@@ -3453,6 +3725,45 @@
   function rerender(){
     setRenderBusy(true); setRenderState("saving","Speichert vor Render …");
     save().then(function(ok){ if(ok){ startRenderJob(); } else { setRenderBusy(false); setRenderState("dirty","Speichern fehlgeschlagen — nicht gerendert"); } });
+  }
+  // EXPORT (04.09.): fertiges Video, 1080x1920 bei 60 fps. Gleicher Renderweg
+  // wie die Vorschau, nur hoehere Qualitaet und ein eigenes Ziel — der
+  // Arbeits-Proxy bleibt unangetastet.
+  var exportPoll=null;
+  function exportFinal(){
+    var b=document.getElementById("btnExport");
+    setRenderBusy(true); setRenderState("saving","Speichert vor Export …");
+    save().then(function(ok){
+      if(!ok){ setRenderBusy(false); setRenderState("dirty","Speichern fehlgeschlagen — nicht exportiert"); return; }
+      if(reviewRate!==1) setReviewRate(1);
+      fetch("/api/export",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"})
+        .then(function(r){ return r.json().then(function(j){ return {status:r.status, body:j}; }); })
+        .then(function(res){
+          if(res.status!==200){
+            setRenderBusy(false);
+            setRenderState("dirty","Export: "+(res.body.error||("Fehler "+res.status)));
+            return;
+          }
+          if(b){ b.disabled=true; b.innerHTML="&#11015; Exportiert …"; }
+          setRenderState("saving","Export läuft (1080p, 60 fps) …");
+          if(exportPoll) clearInterval(exportPoll);
+          exportPoll=setInterval(function(){
+            fetch("/api/render_status").then(function(r){ return r.json(); }).then(function(d){
+              if(!d || d.status==="running") return;
+              clearInterval(exportPoll); exportPoll=null;
+              setRenderBusy(false);
+              if(b){ b.disabled=false; b.innerHTML="&#11015; Exportieren"; }
+              if(d.status==="done" && d.export_da){
+                setRenderState("clean","Export fertig");
+                showToast("Fertig exportiert: "+d.export.split("/").pop()+" ("+d.export_mb+" MB)");
+              } else {
+                setRenderState("dirty","Export fehlgeschlagen — Log: export.log");
+                showToast("Export fehlgeschlagen");
+              }
+            }).catch(function(){});
+          }, 3000);
+        }).catch(function(){ setRenderBusy(false); setRenderState("dirty","Export-Fehler"); });
+    });
   }
   function undo(){
     if(!undoStack.length){ setSaveState("dirty","Nichts rückgängig"); return; }
@@ -3506,7 +3817,7 @@
 
 
   // ---------- B-Roll fuer zurueckgeholte Clips nachziehen ----------
-  // Wenn Sebastian einen geschnittenen Clip wieder hereinholt (oder einen Clip
+  // Wenn der Nutzer einen geschnittenen Clip wieder hereinholt (oder einen Clip
   // verlaengert), fehlt fuer diesen Bereich das Screen-Material in der Spur —
   // die Slots wurden ja nur fuer das damals geschnittene Material erzeugt.
   // Dieser Knopf holt exakt die Bildschirmaufnahme, die zu den ausgewaehlten
@@ -3564,7 +3875,7 @@
   // T setzt Anfang, T erneut setzt Ende (an der Mausposition, sonst am
   // Playhead). Absenden ist Fire-and-Forget: der Auftrag geht mit vollem
   // Kontext (Transkript, Rohzeiten, was davor/danach im Bild liegt) in die
-  // laufende Claude-Session im Terminal — Sebastian arbeitet sofort weiter.
+  // laufende Claude-Session im Terminal — der Nutzer arbeitet sofort weiter.
   var tMarkA=null, tMarkB=null;
   function tFmt(t){ return fmtClock(t); }
   function tUpdate(){
@@ -3690,8 +4001,15 @@
       if(mod && (e.key==="z"||e.key==="Z")){ e.preventDefault(); if(e.shiftKey) redo(); else undo(); return; }
       if(mod && (e.key==="y"||e.key==="Y")){ e.preventDefault(); redo(); return; }
       if(mod && (e.key==="a"||e.key==="A")){ e.preventDefault(); selectAllClips(); return; }
-      if(mod && (e.key==="c"||e.key==="C")){ if(selectedBrolls.size){ e.preventDefault(); copyBrolls(); } return; }
-      if(mod && (e.key==="v"||e.key==="V")){ if(brollClipboard&&brollClipboard.length){ e.preventDefault(); pasteBrolls(); } return; }
+      if(mod && (e.key==="c"||e.key==="C")){
+        if(selectedBrolls.size){ e.preventDefault(); copyBrolls(); }
+        else if(selectedIds.size){ e.preventDefault(); copyClips(); }
+        return; }
+      if(mod && (e.key==="v"||e.key==="V")){
+        // B-Roll hat Vorrang, wenn zuletzt B-Roll kopiert wurde
+        if(brollClipboard&&brollClipboard.length){ e.preventDefault(); pasteBrolls(); }
+        else if(clipClipboard&&clipClipboard.length){ e.preventDefault(); pasteClips(); }
+        return; }
       if(mod) return;
       if(e.key==="j"||e.key==="J"){ e.preventDefault(); applyLcut(); return; }
       if(e.key==="b"||e.key==="B"){ e.preventDefault(); brollNachziehen(); return; }
@@ -3814,9 +4132,12 @@
       bmd.addEventListener("click", function(){ mdf.value=""; mdf.click(); });
       mdf.addEventListener("change", function(){ medienImport(mdf.files && mdf.files[0]); });
     }
+    dropAufbauen();
 
     document.getElementById("btnSave").addEventListener("click", save);
     document.getElementById("btnRerender").addEventListener("click", rerender);
+    var bex=document.getElementById("btnExport");
+    if(bex) bex.addEventListener("click", exportFinal);
     document.getElementById("btnUndo").addEventListener("click", undo);
 
     var drawer=document.getElementById("drawer");
@@ -3894,10 +4215,7 @@
     sfMode=!!state.sfMode;
     captions=(sfMode && state.captions)||[];
     firstFrames=(sfMode && state.firstFrames)||[];
-    // Text-Spur nur zeigen, wenn es tatsaechlich Captions gibt. Die
-    // Caption-Funktion ist in dieser Fassung nicht Teil des Systems —
-    // eine leere Spur wuerde nur verwirren.
-    if(trackCaps) trackCaps.style.display = (sfMode && captions.length) ? "" : "none";
+    if(trackCaps) trackCaps.style.display = sfMode ? "" : "none";
     if(sfMode) setTimeout(ensureTracksFit, 250);
     fitCanvasBox(); setTimeout(fitCanvasBox, 200);
     // B-ROLL-AUFTRAG (03.09.): erst dieser Klick erklaert die Clips fuer final.
@@ -3905,9 +4223,52 @@
     // deshalb muss nichts nachgezogen werden.
     var bmdz=document.getElementById("btnMedien");
     if(bmdz && sfMode) bmdz.style.display="";
+    var bexz=document.getElementById("btnExport");
+    if(bexz && sfMode) bexz.style.display="";
+    // TON (04.09.): Der Standardpegel wird automatisch gesetzt; dieser Regler
+    // nimmt ihn nur zurueck, wenn es der Nutzer mal zu laut ist.
+    var vw=document.getElementById("volWrap"), vr=document.getElementById("volRange"),
+        vl=document.getElementById("volLabel");
+    if(vw && sfMode){
+      vw.style.display="inline-flex";
+      audioGain=+((state.overrides&&state.overrides.audio&&state.overrides.audio.gain_db)||0);
+      vr.value=audioGain; vl.textContent=audioGain+" dB";
+      vr.addEventListener("input", function(){
+        audioGain=+vr.value; vl.textContent=audioGain+" dB"; markDirty();
+      });
+      vr.addEventListener("change", function(){
+        showToast(audioGain===0 ? "Ton auf Standardpegel — wirkt beim nächsten Rendern"
+                                : "Ton "+Math.abs(audioGain)+" dB leiser — wirkt beim nächsten Rendern");
+      });
+      vr.addEventListener("dblclick", function(){
+        audioGain=0; vr.value=0; vl.textContent="0 dB"; markDirty();
+      });
+    }
     // Nach dem Beauftragen still im Hintergrund nachsehen, ob die Beats fertig
-    // sind, und sie dann selbst einhaengen. Sebastian soll nicht raten muessen,
+    // sind, und sie dann selbst einhaengen. der Nutzer soll nicht raten muessen,
     // wann er nochmal druecken darf (04.09.).
+    // NACHTRAGEN BEIM LADEN (04.09.): Fertige B-Rolls kamen bisher nur in die
+    // Timeline, solange die Seite seit dem Klick offen blieb — ein Reload
+    // dazwischen hat sie verschluckt, obwohl die Dateien fertig auf der Platte
+    // lagen. Jetzt sieht das Cockpit beim Laden selbst nach.
+    function brollNachtragen(){
+      fetch("/api/broll_starten_status").then(function(r){ return r.json(); })
+        .then(function(d){
+          if(!d || d.error) return;
+          var fertig=d.beats||[];
+          var fehlend=fertig.filter(function(x){
+            return !broll.some(function(b){ return b && b.clip_id===x.clip_id && b.file; });
+          });
+          if(fehlend.length){
+            var warDirty=dirty;
+            brollEinhaengen(fehlend);
+            // War sonst nichts offen, gleich sichern — sonst ist es nach dem
+            // naechsten Reload wieder weg.
+            if(!warDirty){ try{ save(); }catch(e){} }
+          }
+          if(d.offen>0) brollWarten();     // laeuft noch: live weiter verfolgen
+        }).catch(function(){});
+    }
     var brollWartet=false;
     function brollWarten(){
       if(brollWartet) return;
@@ -3950,6 +4311,7 @@
         showToast(beats.length+" B-Rolls sind fertig und haengen an ihren Clips.");
       }
     }
+    if(sfMode) setTimeout(brollNachtragen, 400);
     var bba=document.getElementById("btnBrollAuftrag");
     if(bba && sfMode){
       bba.style.display="";
@@ -3964,7 +4326,7 @@
             if(d.error) throw new Error(d.error);
             // Slots NUR fuer Beats anlegen, die es wirklich als Datei gibt.
             // Leere Slots sahen im Cockpit aus wie fertiges B-Roll und liessen
-            // sich nicht abspielen (Sebastian, 03.09.).
+            // sich nicht abspielen (der Nutzer, 03.09.).
             var neu=0, ersetzt=0;
             if((d.beats||[]).length) pushUndo();
             (d.beats||[]).forEach(function(x){
@@ -3998,7 +4360,7 @@
       });
     }
     var bcs=document.getElementById("btnCapSync");
-    if(bcs && sfMode && captions.length){
+    if(bcs && sfMode){
       bcs.style.display="";
       bcs.addEventListener("click", function(){
         if(!confirm("Captions aus Transkript + aktuellem Schnitt NEU bauen?\n"+
@@ -4081,7 +4443,7 @@
     fitCanvasBox(); setTimeout(fitCanvasBox, 150);
     // Clips: gespeicherte Timeline hat Vorrang, sonst Erst-Aufbau aus Segmenten
     clips=(o.timeline_clips&&o.timeline_clips.length) ? clipsFromSaved(o.timeline_clips) : freshClips();
-    // Sebastians Standard-Look auch dann setzen, wenn die Clips NICHT ueber
+    // des Nutzers Standard-Look auch dann setzen, wenn die Clips NICHT ueber
     // freshClips entstanden sind: der Cutting-Agent schreibt timeline_clips
     // per Skript, dort fehlen die Look-Felder ganz. Entscheidend sind die
     // ROHDATEN — clipsFromSaved hat sie oben schon auf 0 normalisiert, eine
