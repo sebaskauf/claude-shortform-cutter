@@ -73,8 +73,11 @@
   .side-tab.mini:hover { color: var(--warn); border-color: var(--warn); }
   .side-tab.active { color: var(--text); border-color: var(--border-strong); background: var(--panel-3); }
   .side-tab .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-left: 5px; vertical-align: middle; }
-  .claude-pane { position: relative; flex: 1; min-height: 0; background: #0a0a0d; border-radius: 6px; overflow: hidden; }
-  #claudeTermHost { position: absolute; inset: 6px; }
+  .claude-pane { display:flex;flex-direction:column;position: relative; flex: 1; min-height: 0; background: #0a0a0d; border-radius: 6px; overflow: hidden; }
+  #claudeTermHost { position: relative;flex:1;min-height:0;margin:6px; }
+  .provider-tools { position:relative;z-index:6;flex:none;background:#0a0a0d; }
+  .provider-tools :focus-visible { outline:2px solid #f97316;outline-offset:2px; }
+  .provider-tools button { font-size:11px;background:#16161a;color:#eee;border:1px solid #444;border-radius:4px;padding:4px 6px; }
   .claude-exit { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; background: rgba(10,10,13,.92); z-index: 5; }
   .claude-exit button { background: var(--panel-3); border: 1px solid var(--border-strong); color: var(--text); border-radius: 6px; padding: 6px 14px; cursor: pointer; }
   #inspectorPane { overflow: auto; min-height: 0; flex: 1; }
@@ -418,17 +421,24 @@
         <span class="legend"><kbd>Leer</kbd> Play · <kbd>W</kbd> Cut · <kbd>Q</kbd>/<kbd>E</kbd> Cut links/rechts weg · <kbd>⇧</kbd> radikal · <kbd>Entf</kbd> Löschen · <kbd>+/−</kbd> Zoom · <kbd>⇧Klick</kbd> Bereich markieren · <kbd>⌥Ziehen</kbd> Auswahlbox · <kbd>Ziehen</kbd> Clips verschieben</span>
       </div>
     </div>
-    <aside class="inspector" id="inspector" aria-label="Claude + Clip-Inspector">
+    <aside class="inspector" id="inspector" aria-label="Agent + Clip-Inspector">
       <div class="side-tabs">
         <button class="side-tab active" id="tabClaude" type="button">Claude</button>
         <button class="side-tab" id="tabInspector" type="button">Inspector<span class="dot" id="inspDot" style="display:none"></span></button>
-        <button class="side-tab mini" id="btnKillSession" type="button"
+        <button class="side-tab mini" id="btnKillSession" type="button" aria-label="Ausgewählte Agent-Session beenden"
                 title="Agent-Session dieses Projekts BEENDEN (tmux + Claude). Normalerweise nicht nötig — die Session überlebt Projektwechsel absichtlich und arbeitet im Hintergrund weiter.">✕</button>
       </div>
       <div class="claude-pane" id="claudePane">
+        <div class="provider-tools" style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px 8px;border-bottom:1px solid #333">
+          <label for="terminalProvider">Anbieter</label>
+          <select id="terminalProvider" name="terminalProvider" style="background:#16161a;color:#eee"><option value="claude">Claude</option><option value="codex">Codex</option></select>
+          <button id="providerModel" type="button" title="/model ins Terminal einfügen; mit Enter öffnen">Modell</button>
+          <button id="providerPermissions" type="button" title="/permissions ins Terminal einfügen; mit Enter öffnen">Rechte</button>
+          <span id="providerStatus" role="status" aria-live="polite" style="font-size:11px;overflow-wrap:anywhere">Lädt…</span>
+        </div>
         <div id="claudeTermHost"></div>
         <div class="claude-exit" id="claudeExit" style="display:none">
-          <div>Claude-Session beendet.</div>
+          <div>Agent-Session beendet.</div>
           <button id="btnTermRestart" type="button">Neu starten</button>
         </div>
       </div>
@@ -470,8 +480,8 @@
     <div id="healthBar"></div>
   <div id="tBar">
       <span class="rng" id="tRange"></span>
-      <textarea id="tPrompt" rows="1" placeholder="Optional: was soll zu sehen sein? (leer lassen = Claude entscheidet)"></textarea>
-      <button id="btnTSend">An Claude senden</button>
+      <textarea id="tPrompt" rows="1" placeholder="Optional: was soll zu sehen sein? (leer lassen = Agent entscheidet)"></textarea>
+      <button id="btnTSend">An Agent senden</button>
       <button id="btnTClear">Verwerfen</button>
     </div>
     <div class="tl-scroll" id="tlScroll">
@@ -2185,6 +2195,23 @@
     // platziert — die Mathematik kommt aus der BOX (capBoxRect), nie aus den
     // Video-Metadaten: rotierte iPhone-Aufnahmen luegen ueber ihre Groesse.
     if(!capBoxRect || !canvasBox) return;
+    // ⚠️ LONGFORM-GUARD (Bug 05.09.2026, setup-modul): Diese Funktion schreibt
+    // die SHORTFORM-Kartengeometrie (Design-Raum 1080x1920) als Inline-Style auf
+    // jeden .broll-layer. measureCapBox() ruft sie aber bei JEDEM Resize auf —
+    // ohne sfMode zu pruefen. In einem Longform-Projekt landete die
+    // Bildschirmaufnahme dadurch als ~273x153-Kaertchen links oben statt
+    // vollflaechig hinter dem Facecam-Kreis (1316*R.f x 740*R.f bei R.f=0.207,
+    // plus seitlichem clipPath). Die Inline-Styles ueberschreiben das CSS
+    // "inset:0; width:100%; height:100%". Hier deshalb sauber zuruecksetzen,
+    // damit die CSS-Regel wieder greift, und raus.
+    if(typeof sfMode==="undefined" || !sfMode){
+      document.querySelectorAll(".canvas-box .broll-layer").forEach(function(el){
+        if(!el.style.width && !el.style.left && !el.style.clipPath) return;
+        el.style.left=""; el.style.top=""; el.style.width=""; el.style.height="";
+        el.style.right=""; el.style.bottom=""; el.style.clipPath="";
+      });
+      return;
+    }
     var R=capBoxRect;
     var geo=sfGeoSlot && sfGeoSlot.geo;
     canvasBox.style.setProperty("--sf-shift", (geo?0:(572*R.f)).toFixed(2)+"px");
@@ -2790,8 +2817,18 @@
                      name:d.name, kind:"free", src_in:0,
                      anchor:+outToRaw(t).toFixed(3), medien:true,
                      geo:{ x:0.5, y:0.5, w:0.8 } });
-        renderTimeline(); selectBroll(broll.length-1); markDirty();
-        showToast("Importiert: "+d.name+" — am Playhead abgelegt, im Player verschiebbar");
+        markDirty();
+        // SOFORT SPEICHERN (05.09.): Der Server sucht die Datei zum Schluessel
+        // in den GESPEICHERTEN Slots. Vor dem Speichern kennt er sie nicht,
+        // antwortet 404 — und der Player zeigt einen leeren Rahmen, den man
+        // zwar schieben, aber nicht sehen kann. Erst sichern, dann anzeigen.
+        return save().then(function(){
+          mediaVer=String(Date.now());     // 404 aus dem Browser-Cache werfen
+          renderTimeline(); selectBroll(broll.length-1);
+          if(typeof renderBrollClips==="function") renderBrollClips();
+          updateOverlayPreview();
+          showToast("Importiert: "+d.name+" — am Playhead abgelegt, im Player verschiebbar");
+        });
       })
       .catch(function(e){ showToast("Import fehlgeschlagen: "+e.message); });
   }
@@ -3908,16 +3945,16 @@
     var prompt=document.getElementById("tPrompt").value||"";
     var btn=document.getElementById("btnTSend"); btn.disabled=true; btn.textContent="sende …";
     fetch("/api/broll_request",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({start:a,end:b,prompt:prompt})})
+      body:JSON.stringify({requestId:(window.crypto&&crypto.randomUUID?crypto.randomUUID():String(Date.now())+Math.random()), provider:window.cutterTerminalProvider(), start:a,end:b,prompt:prompt})})
       .then(function(r){return r.json();}).then(function(j){
-        btn.disabled=false; btn.textContent="An Claude senden";
+        btn.disabled=false; btn.textContent="An "+(window.cutterProviderLabel?window.cutterProviderLabel():"Agent")+" senden";
         if(j&&j.ok){
           showToast(j.terminal
-            ? "Auftrag an Claude gesendet ("+tFmt(a)+"–"+tFmt(b)+") — läuft im Hintergrund, du kannst weiterarbeiten."
-            : "Auftrag gespeichert, aber das Claude-Terminal antwortet nicht. Im CLAUDE-Tab 'Neu starten' drücken.");
+            ? "Auftrag an "+(j.provider === "codex" ? "Codex" : "Claude")+" gesendet ("+tFmt(a)+"–"+tFmt(b)+") — läuft im Hintergrund, du kannst weiterarbeiten."
+            : "Auftrag gespeichert, aber das Agent-Terminal antwortet nicht. Im Agent-Tab 'Neu starten' drücken.");
           tClear();
         } else { showToast("Auftrag fehlgeschlagen: "+((j&&j.error)||"unbekannt")); }
-      }).catch(function(){ btn.disabled=false; btn.textContent="An Claude senden"; showToast("Netzwerk-Fehler beim Senden"); });
+      }).catch(function(){ btn.disabled=false; btn.textContent="An "+(window.cutterProviderLabel?window.cutterProviderLabel():"Agent")+" senden"; showToast("Netzwerk-Fehler beim Senden"); });
   }
 
   // ---------- Drawer: Transkript + Nähte ----------
@@ -3994,6 +4031,20 @@
   }
 
   function setupKeyboard(){
+    // ⚠️ FOKUS-RUECKGABE (Bug 05.09.2026): xterm.js haelt den Tastaturfokus in
+    // einer versteckten <textarea> im #claudePane. Ein Klick auf Timeline oder
+    // Player nimmt ihn NICHT weg — divs sind nicht fokussierbar. Danach lieferte
+    // jedes keydown e.target = xterm-textarea, isTyping() sagte "tippt gerade"
+    // und ALLE Shortcuts waren tot: W/Q/E landeten als term/input im Terminal,
+    // es wurde kein Cut gesetzt (und das Playback spielte folgerichtig den
+    // alten Stand). Jeder Klick ausserhalb des Claude-Panels gibt den Fokus
+    // deshalb wieder frei.
+    document.addEventListener("pointerdown", function(e){
+      var t=e.target;
+      if(t && t.closest && t.closest("#claudePane")) return;   // im Terminal: Fokus behalten
+      var a=document.activeElement;
+      if(a && a.closest && a.closest("#claudePane")){ try{ a.blur(); }catch(_){} }
+    }, true);
     window.addEventListener("keydown", function(e){
       if(isTyping(e)) return;
       var mod=e.metaKey||e.ctrlKey;
@@ -4176,7 +4227,7 @@
     if(cur){
       var m={arbeitet:"🟠 Agent arbeitet", fertig:"🟢 Agent fertig",
              bereit:"🤖 Agent bereit", beendet:"⚪ Agent beendet"};
-      txt=m[cur.status]||"🤖 Agent läuft";
+      txt=(m[cur.status]||"🤖 Agent läuft")+" · "+(cur.provider==="codex"?"Codex":"Claude");
       if(cur.status==="arbeitet") cls+=" saving";
       else if(cur.status==="fertig") cls+=" saved";
       var tip="Session "+(cur.session||"")+(cur.ts?" · "+cur.ts:"");
@@ -4185,7 +4236,7 @@
     }
     var busy=andere.filter(function(s){ return s.status==="arbeitet"; });
     if(busy.length){
-      txt+=(txt?" · ":"")+busy.map(function(s){ return "🟠 "+s.projekt; }).join(" ")+" im Hintergrund";
+      txt+=(txt?" · ":"")+busy.map(function(s){ return "🟠 "+s.projekt+" · "+(s.provider==="codex"?"Codex":"Claude"); }).join(" ")+" im Hintergrund";
       if(!cur) cls+=" saving";
     } else if(!cur && andere.length){
       txt="🤖 "+andere.length+" Session(s) im Hintergrund";
@@ -4320,7 +4371,7 @@
                              "Der Auftrag wird aus dem GESPEICHERTEN Stand gebaut.\n"+
                              "Trotzdem fortfahren?")) return;
         bba.disabled=true; bba.textContent="\u2605 \u2026";
-        fetch("/api/broll_starten",{method:"POST"})
+        fetch("/api/broll_starten",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({provider:window.cutterTerminalProvider()})})
           .then(function(r){ return r.json(); })
           .then(function(d){
             if(d.error) throw new Error(d.error);
@@ -4479,90 +4530,6 @@
   fetch("/api/state").then(function(r){return r.json();}).then(init).catch(function(e){ document.getElementById("statSummary").textContent="Fehler: "+e; });
 })();
 
-// ---------- Claude-Terminal (rechte Spalte, echtes PTY via SSE) ----------
-(function(){
-  var TermCtor = window.Terminal && window.Terminal.Terminal ? window.Terminal.Terminal : window.Terminal;
-  var FitCtor = window.FitAddon && window.FitAddon.FitAddon ? window.FitAddon.FitAddon : window.FitAddon;
-  var host = document.getElementById("claudeTermHost");
-  var pane = document.getElementById("claudePane");
-  var inspPane = document.getElementById("inspectorPane");
-  var tabC = document.getElementById("tabClaude");
-  var tabI = document.getElementById("tabInspector");
-  var inspDot = document.getElementById("inspDot");
-  var exitOv = document.getElementById("claudeExit");
-  if(!TermCtor || !host){ if(tabC) tabC.style.display="none"; return; }
-  var term = new TermCtor({
-    fontSize: 12,
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    theme: { background: "#0a0a0d", foreground: "#e5e7eb", cursor: "#f97316" },
-    cursorBlink: true,
-    scrollback: 5000
-  });
-  var fit = FitCtor ? new FitCtor() : null;
-  if(fit) term.loadAddon(fit);
-  term.open(host);
-  function doFit(){
-    if(!fit || pane.style.display==="none") return;
-    try { fit.fit(); } catch(_){}
-    fetch("/api/term/resize", {method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({cols: term.cols, rows: term.rows})}).catch(function(){});
-  }
-  new ResizeObserver(function(){ doFit(); }).observe(host);
-  term.onData(function(d){
-    fetch("/api/term/input", {method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({data: btoa(unescape(encodeURIComponent(d)))})}).catch(function(){});
-  });
-  function b64ToBytes(b64){
-    var bin = atob(b64); var arr = new Uint8Array(bin.length);
-    for(var i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
-    return arr;
-  }
-  var es = null;
-  function connect(){
-    es = new EventSource("/api/term/stream");
-    // Bei jedem (Re-)Connect schickt der Server den Ring-Buffer als Replay —
-    // Terminal vorher leeren, sonst doppelter Inhalt nach Reconnect.
-    es.onopen = function(){ term.reset(); };
-    es.onmessage = function(ev){ term.write(b64ToBytes(ev.data)); };
-    es.addEventListener("exit", function(){ exitOv.style.display="flex"; es.close(); });
-  }
-  connect();
-  document.getElementById("btnTermRestart").addEventListener("click", function(){
-    fetch("/api/term/restart", {method:"POST"}).then(function(){
-      exitOv.style.display="none"; term.reset();
-      if(es) es.close(); connect(); setTimeout(doFit, 150);
-    }).catch(function(){});
-  });
-  // Agent-Session WIRKLICH beenden (tmux kill-session) — mit Rueckfrage,
-  // weil ein laufender Hintergrund-Auftrag (B-Roll-Bau) damit abbricht.
-  var bks=document.getElementById("btnKillSession");
-  if(bks) bks.addEventListener("click", function(){
-    if(!confirm("Agent-Session dieses Projekts wirklich beenden?\n"+
-                "Ein laufender Auftrag (z.B. B-Roll-Bau) bricht damit ab.\n"+
-                "Danach startet automatisch eine frische Session.")) return;
-    fetch("/api/term/kill_session", {method:"POST"}).then(function(){
-      exitOv.style.display="none"; term.reset();
-      if(es) es.close(); connect(); setTimeout(doFit, 150);
-    }).catch(function(){});
-  });
-  function showClaude(){
-    tabC.classList.add("active"); tabI.classList.remove("active");
-    pane.style.display=""; inspPane.style.display="none";
-    setTimeout(doFit, 30); term.focus();
-  }
-  function showInspector(){
-    tabI.classList.add("active"); tabC.classList.remove("active");
-    pane.style.display="none"; inspPane.style.display="";
-    inspDot.style.display="none";
-  }
-  tabC.addEventListener("click", showClaude);
-  tabI.addEventListener("click", showInspector);
-  // Badge: Clip ausgewählt während Claude-Tab offen → Punkt am Inspector-Tab
-  new MutationObserver(function(){
-    if(inspPane.style.display==="none" && !document.querySelector("#inspBody .insp-empty")){
-      inspDot.style.display="";
-    }
-  }).observe(document.getElementById("inspBody"), {childList:true, subtree:true});
-  setTimeout(doFit, 100);
-})();
 </script>
+
+<script src="/vendor/provider-terminal.js"></script>
