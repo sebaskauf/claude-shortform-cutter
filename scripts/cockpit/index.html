@@ -177,6 +177,20 @@
     box-shadow:0 0 0 1px rgba(0,0,0,.35);cursor:move;background:rgba(56,189,248,.07)}
   #medEdit .medHandle{position:absolute;width:11px;height:11px;background:#fff;
     border:1.5px solid #38bdf8;border-radius:2px}
+  /* MASKE (05.09.): Kanten-Griffe = Maske (symmetrisch), Ecken = Groesse. Balken
+     statt Quadrate, damit man sie nicht verwechselt. */
+  #medEdit .medEdge{position:absolute;background:#fff;border:1.5px solid #38bdf8;border-radius:3px}
+  #medEdit .medEdge[data-e="n"],#medEdit .medEdge[data-e="s"]{left:50%;width:26px;height:7px;margin-left:-13px}
+  #medEdit .medEdge[data-e="w"],#medEdit .medEdge[data-e="e"]{top:50%;width:7px;height:26px;margin-top:-13px}
+  #medEdit .medEdge[data-e="n"]{top:-4px;cursor:ns-resize}
+  #medEdit .medEdge[data-e="s"]{bottom:-4px;cursor:ns-resize}
+  #medEdit .medEdge[data-e="w"]{left:-4px;cursor:ew-resize}
+  #medEdit .medEdge[data-e="e"]{right:-4px;cursor:ew-resize}
+  /* AUSRICHTUNGSLINIEN (05.09.): gelb wie in CapCut, nur waehrend des Ziehens */
+  .snapV,.snapH{position:absolute;z-index:8;pointer-events:none;display:none;
+    background:#ffd60a;box-shadow:0 0 5px rgba(255,214,10,.85)}
+  .snapV{top:0;bottom:0;width:1px}
+  .snapH{left:0;right:0;height:1px}
   #medEdit .medHandle[data-c="nw"]{left:-6px;top:-6px;cursor:nwse-resize}
   #medEdit .medHandle[data-c="ne"]{right:-6px;top:-6px;cursor:nesw-resize}
   #medEdit .medHandle[data-c="sw"]{left:-6px;bottom:-6px;cursor:nesw-resize}
@@ -394,7 +408,10 @@
       <div id="medEdit" style="display:none" aria-label="Medien im Player verschieben und skalieren">
         <div class="medHandle" data-c="nw"></div><div class="medHandle" data-c="ne"></div>
         <div class="medHandle" data-c="sw"></div><div class="medHandle" data-c="se"></div>
+        <div class="medEdge" data-e="n" title="Maske: oben/unten"></div><div class="medEdge" data-e="s" title="Maske: oben/unten"></div>
+        <div class="medEdge" data-e="w" title="Maske: links/rechts"></div><div class="medEdge" data-e="e" title="Maske: links/rechts"></div>
       </div>
+      <div class="snapV" id="snapV"></div><div class="snapH" id="snapH"></div>
       <div id="capEdit" style="display:none" aria-label="Text im Player bearbeiten">
         <div class="capHandle" data-c="nw"></div><div class="capHandle" data-c="ne"></div>
         <div class="capHandle" data-c="sw"></div><div class="capHandle" data-c="se"></div>
@@ -1959,6 +1976,78 @@
   // Design-Raum aus capBoxRect. Der Renderer rechnet identisch (rebuild_sf
   // overlay x/y aus geo), damit Vorschau und Ausgabe deckungsgleich sind.
   var medDrag=null;
+  // MASKE (05.09.): Rechteck-Maske pro Medium, wie in CapCut. w/h = Anteil des
+  // Mediums, der stehen bleibt (symmetrisch um den Masken-Mittelpunkt); x/y =
+  // Versatz des Masken-Mittelpunkts relativ zur Mediumgroesse; r = Eckenrundung,
+  // f = weiche Kante — beide in Design-Pixeln (Karte ist im Design-Raum 1:1).
+  function maskVon(b){
+    var m=(b&&b.mask)||{};
+    return { w:Math.max(0.05,Math.min(1,+m.w||1)), h:Math.max(0.05,Math.min(1,+m.h||1)),
+             x:Math.max(-0.5,Math.min(0.5,+m.x||0)), y:Math.max(-0.5,Math.min(0.5,+m.y||0)),
+             r:Math.max(0,Math.min(400,+m.r||0)), f:Math.max(0,Math.min(200,+m.f||0)) };
+  }
+  function maskAktiv(b){
+    var m=maskVon(b); return m.w<0.999||m.h<0.999||m.r>0||m.f>0||Math.abs(m.x)>0.0005||Math.abs(m.y)>0.0005;
+  }
+  // Weiche Kante braucht ein Alpha-Bild: gleiche Zeichnung wie PIL im Renderer
+  // (gerundetes Rechteck, um f eingerueckt, dann Gauss mit Radius f).
+  var _maskCache={};
+  function maskDataUrl(pw,ph,m,f){
+    var key=[pw|0,ph|0,m.w,m.h,m.x,m.y,m.r,m.f,f.toFixed(3)].join("|");
+    if(_maskCache[key]) return _maskCache[key];
+    var c=document.createElement("canvas"); c.width=Math.max(2,pw|0); c.height=Math.max(2,ph|0);
+    var g=c.getContext("2d");
+    var mw=pw*m.w, mh=ph*m.h, cx=pw/2+m.x*pw, cy=ph/2+m.y*ph;
+    var fe=m.f*f, r=Math.max(0,m.r*f-fe);
+    var x0=cx-mw/2+fe, y0=cy-mh/2+fe, w=Math.max(1,mw-2*fe), h=Math.max(1,mh-2*fe);
+    r=Math.min(r,w/2,h/2);
+    g.filter=fe>0?("blur("+fe.toFixed(2)+"px)"):"none";
+    g.fillStyle="#fff"; g.beginPath();
+    g.moveTo(x0+r,y0); g.arcTo(x0+w,y0,x0+w,y0+h,r); g.arcTo(x0+w,y0+h,x0,y0+h,r);
+    g.arcTo(x0,y0+h,x0,y0,r); g.arcTo(x0,y0,x0+w,y0,r); g.closePath(); g.fill();
+    var u=c.toDataURL("image/png");
+    var ks=Object.keys(_maskCache); if(ks.length>24) delete _maskCache[ks[0]];
+    _maskCache[key]=u; return u;
+  }
+  function maskAnwenden(el,pw,ph,b,f){
+    if(!maskAktiv(b)){ el.style.clipPath="none"; el.style.webkitMaskImage=""; el.style.maskImage=""; return; }
+    var m=maskVon(b);
+    if(m.f>0){
+      el.style.clipPath="none";
+      var u=maskDataUrl(pw,ph,m,f);
+      el.style.webkitMaskImage="url("+u+")"; el.style.maskImage="url("+u+")";
+      el.style.webkitMaskSize="100% 100%"; el.style.maskSize="100% 100%";
+      el.style.webkitMaskRepeat="no-repeat"; el.style.maskRepeat="no-repeat";
+      return;
+    }
+    el.style.webkitMaskImage=""; el.style.maskImage="";
+    var mw=pw*m.w, mh=ph*m.h, cx=pw/2+m.x*pw, cy=ph/2+m.y*ph;
+    var top=cy-mh/2, left=cx-mw/2, right=pw-(cx+mw/2), bottom=ph-(cy+mh/2);
+    var r=Math.min(m.r*f, mw/2, mh/2);
+    el.style.clipPath="inset("+top.toFixed(2)+"px "+right.toFixed(2)+"px "+bottom.toFixed(2)+"px "+left.toFixed(2)+"px"+
+                      (r>0?(" round "+r.toFixed(2)+"px"):"")+")";
+  }
+  // AUSRICHTUNGSLINIEN (05.09.): Mitte und Bildrand, 8 Bildschirmpixel Fang,
+  // Alt-Taste = frei. Positionen im Design-Raum (0..1), Anzeige in Box-Pixeln.
+  var SNAP_PX=8;
+  function snapLinien(vx,hy){
+    var R=capBoxRect, v=document.getElementById("snapV"), h=document.getElementById("snapH");
+    if(!R||!v||!h) return;
+    if(vx==null){ v.style.display="none"; } else { v.style.left=(R.dx+vx*1080*R.f).toFixed(1)+"px"; v.style.display="block"; }
+    if(hy==null){ h.style.display="none"; } else { h.style.top=(R.dy+hy*1920*R.f).toFixed(1)+"px"; h.style.display="block"; }
+  }
+  function snapWeg(){ snapLinien(null,null); }
+  // gibt {x,y,lx,ly}: gefangene Mitte + wo die Linie steht (oder null)
+  function snapMedium(gx,gy,gw,gh,alt){
+    if(alt||!capBoxRect) return {x:gx,y:gy,lx:null,ly:null};
+    var tx=SNAP_PX/(1080*capBoxRect.f), ty=SNAP_PX/(1920*capBoxRect.f);
+    var kx=[[0.5,0.5],[gw/2,0],[1-gw/2,1]];      // [Mitte des Mediums wenn..., Linienposition]
+    var ky=[[0.5,0.5],[gh/2,0],[1-gh/2,1]];
+    var bx=null,by=null,lx=null,ly=null,dx=tx,dy=ty;
+    kx.forEach(function(k){ var d=Math.abs(gx-k[0]); if(d<dx){ dx=d; bx=k[0]; lx=k[1]; } });
+    ky.forEach(function(k){ var d=Math.abs(gy-k[0]); if(d<dy){ dy=d; by=k[0]; ly=k[1]; } });
+    return { x:(bx==null?gx:bx), y:(by==null?gy:by), lx:lx, ly:ly };
+  }
   function medSlotAktiv(){
     if(!sfMode) return null;
     if(selectedBroll!=null && broll[selectedBroll] && broll[selectedBroll].geo) return broll[selectedBroll];
@@ -1982,11 +2071,13 @@
     var ed=document.getElementById("medEdit"); if(!ed) return;
     ed.addEventListener("pointerdown", function(ev){
       var b=medSlotAktiv(); if(!b||!b.geo||!capBoxRect) return;
-      var h=ev.target.closest(".medHandle");
+      var h=ev.target.closest(".medHandle"), e=ev.target.closest(".medEdge");
       ev.preventDefault(); ev.stopPropagation();
       pushUndo();
-      medDrag={ b:b, mode:h?"scale":"move", x0:ev.clientX, y0:ev.clientY,
-                gx0:+b.geo.x||0.5, gy0:+b.geo.y||0.5, gw0:+b.geo.w||0.8, moved:false };
+      var m0=maskVon(b);
+      medDrag={ b:b, mode:e?"mask":(h?"scale":"move"), edge:e?e.getAttribute("data-e"):null,
+                x0:ev.clientX, y0:ev.clientY,
+                gx0:+b.geo.x||0.5, gy0:+b.geo.y||0.5, gw0:+b.geo.w||0.8, m0:m0, moved:false };
       window.addEventListener("pointermove", onMedMove);
       window.addEventListener("pointerup", onMedUp);
     });
@@ -1996,11 +2087,31 @@
     var R=capBoxRect, d=medDrag;
     var dx=(ev.clientX-d.x0), dy=(ev.clientY-d.y0);
     if(Math.abs(dx)>3||Math.abs(dy)>3) d.moved=true;
+    var lay=document.querySelector(".canvas-box.sfsplit .broll-layer.on");
     if(d.mode==="move"){
       // Bewusst weiter als 0..1: das Medium darf auch halb aus dem Bild
       // ragen (CapCut kann das auch). Der Renderer clippt beim Overlay.
-      d.b.geo.x=+Math.max(-0.5,Math.min(1.5, d.gx0 + dx/(1080*R.f))).toFixed(4);
-      d.b.geo.y=+Math.max(-0.5,Math.min(1.5, d.gy0 + dy/(1920*R.f))).toFixed(4);
+      var gx=Math.max(-0.5,Math.min(1.5, d.gx0 + dx/(1080*R.f)));
+      var gy=Math.max(-0.5,Math.min(1.5, d.gy0 + dy/(1920*R.f)));
+      // Fang an Mitte und Rand — Hoehe des Mediums im Design-Raum aus dem Layer
+      var gw=+d.b.geo.w||0.8, gh=gw*(1080/1920);
+      if(lay&&lay.offsetWidth) gh=(lay.offsetHeight/lay.offsetWidth)*gw*(1080/1920);
+      var sn=snapMedium(gx,gy,gw,gh,ev.altKey);
+      d.b.geo.x=+sn.x.toFixed(4); d.b.geo.y=+sn.y.toFixed(4);
+      snapLinien(sn.lx, sn.ly);
+    } else if(d.mode==="mask"){
+      // Symmetrisch: eine Kante ziehen aendert Breite ODER Hoehe, die
+      // Gegenkante folgt zwangslaeufig — genau das CapCut-Verhalten.
+      var m=d.b.mask||(d.b.mask={}); var m0=d.m0;
+      var pw=lay?lay.offsetWidth:1, ph=lay?lay.offsetHeight:1;
+      if(d.edge==="n"||d.edge==="s"){
+        var dh=(d.edge==="n"?-dy:dy)*2/ph;
+        m.h=+Math.max(0.05,Math.min(1, m0.h+dh)).toFixed(4);
+      } else {
+        var dw=(d.edge==="w"?-dx:dx)*2/pw;
+        m.w=+Math.max(0.05,Math.min(1, m0.w+dw)).toFixed(4);
+      }
+      if(m.x==null){ m.x=m0.x; m.y=m0.y; m.r=m0.r; m.f=m0.f; }
     } else {
       d.b.geo.w=+Math.max(0.05,Math.min(3, d.gw0 + (dx*2)/(1080*R.f))).toFixed(4);
     }
@@ -2009,7 +2120,11 @@
   function onMedUp(){
     window.removeEventListener("pointermove", onMedMove);
     window.removeEventListener("pointerup", onMedUp);
-    if(medDrag && medDrag.moved){ markDirty(); updateInspector(); }
+    snapWeg();
+    if(medDrag && medDrag.moved){
+      if(medDrag.mode==="mask"){ var m=maskVon(medDrag.b); showToast("Maske "+Math.round(m.w*100)+" × "+Math.round(m.h*100)+" %"); }
+      markDirty(); updateInspector();
+    }
     medDrag=null;
   }
   // ---------- Hauptvideo im Player verschieben (04.09.) ----------
@@ -2047,15 +2162,24 @@
     // zwischen Design-Raum (1080x1920) und dargestellter Groesse.
     var pctX=dx/(1080*capBoxRect.f)*100, pctY=dy/(1920*capBoxRect.f)*100;
     var gr=lookGrenzen("ox");
-    vidDrag.start.forEach(function(s){
-      s.c.ox=+Math.max(gr.mn, Math.min(gr.mx, s.ox+pctX)).toFixed(2);
-      s.c.oy=+Math.max(gr.mn, Math.min(gr.mx, s.oy+pctY)).toFixed(2);
+    var tolX=SNAP_PX/(1080*capBoxRect.f)*100, tolY=SNAP_PX/(1920*capBoxRect.f)*100;
+    var lx=null, ly=null;
+    vidDrag.start.forEach(function(s,i){
+      var nx=Math.max(gr.mn, Math.min(gr.mx, s.ox+pctX));
+      var ny=Math.max(gr.mn, Math.min(gr.mx, s.oy+pctY));
+      if(!ev.altKey){                       // Fang auf die Ausgangslage (zentriert)
+        if(Math.abs(nx)<tolX){ nx=0; if(i===0) lx=0.5; }
+        if(Math.abs(ny)<tolY){ ny=0; if(i===0) ly=0.5; }
+      }
+      s.c.ox=+nx.toFixed(2); s.c.oy=+ny.toFixed(2);
     });
+    snapLinien(lx,ly);
     _geoMain=null; _geoSb=null; updateClipLook();
   }
   function onVidUp(){
     window.removeEventListener("pointermove", onVidMove);
     window.removeEventListener("pointerup", onVidUp);
+    snapWeg();
     if(vidDrag && vidDrag.moved){
       var z=vidDrag.start, c=z[0].c;
       markDirty(); updateInspector();
@@ -2226,13 +2350,15 @@
         el.style.left=(R.dx+(+geo.x||0.5)*1080*R.f-w/2).toFixed(2)+"px";
         el.style.top =(R.dy+(+geo.y||0.5)*1920*R.f-h/2).toFixed(2)+"px";
         el.style.width=w.toFixed(2)+"px"; el.style.height=h.toFixed(2)+"px";
-        el.style.right="auto"; el.style.bottom="auto"; el.style.clipPath="none";
+        el.style.right="auto"; el.style.bottom="auto";
+        maskAnwenden(el, w, h, sfGeoSlot, R.f);
       } else {
         el.style.left=(R.dx-118*R.f).toFixed(2)+"px";
         el.style.top =R.dy.toFixed(2)+"px";
         el.style.width =(1316*R.f).toFixed(2)+"px";
         el.style.height=(740*R.f).toFixed(2)+"px";
         el.style.right="auto"; el.style.bottom="auto";
+        el.style.webkitMaskImage=""; el.style.maskImage="";
         el.style.clipPath="inset(0 "+(118*R.f).toFixed(2)+"px 0 "+(118*R.f).toFixed(2)+"px)";
       }
     });
@@ -2780,11 +2906,49 @@
       +'<div class="gain-wrap"><label for="inspBrollFile">Dateipfad</label>'+
         '<input id="inspBrollFile" type="text" style="width:100%" placeholder="/Pfad/zum/broll.mp4" value="'+esc(b.file||"")+'" aria-label="B-Roll Dateipfad"></div>'+
       '<p class="insp-empty" style="margin:4px 0">Frei verschiebbar (klebt NICHT am Hauptvideo): Position/Länge per Drag &amp; Resize, Datei-Versatz = Startpunkt in der Datei.</p>'+
+      (b.geo?maskInspHtml(b):'')+
       '<div style="margin-top:10px"><button id="inspBrollDelete" class="danger" aria-label="B-Roll-Slot löschen">B-Roll löschen</button></div>';
     document.getElementById("inspBrollFile").addEventListener("change", function(e){ pushUndo(); b.file=e.target.value.trim(); renderTimeline(); markDirty(); });
     document.getElementById("inspBrollSrcIn").addEventListener("change", function(e){ pushUndo(); b.src_in=Math.max(0,+e.target.value||0); markDirty(); });
     var fitEl=document.getElementById("inspBrollFit"); if(fitEl){ fitEl.addEventListener("change", function(e){ pushUndo(); if(e.target.checked){ b.speed="fit"; } else { delete b.speed; } markDirty(); showToast(e.target.checked?"Tempo-Fit an — wirkt beim Neu rendern":"Tempo-Fit aus"); }); }
     document.getElementById("inspBrollDelete").addEventListener("click", function(){ deleteBroll(i); });
+    if(b.geo) bindMaskInsp(b);
+  }
+  // MASKE im Inspector (05.09.): dieselben Regler wie CapCut — Groesse ueber die
+  // Kanten im Player, hier zusaetzlich Eckenrundung, weiche Kante und Versatz.
+  var MASK_FELDER=[["w","Breite","%",5,100,100],["h","Höhe","%",5,100,100],
+                   ["r","Ecken","px",0,400,1],["f","Weiche Kante","px",0,200,1],
+                   ["x","Versatz ↔","%",-50,50,100],["y","Versatz ↕","%",-50,50,100]];
+  function maskInspHtml(b){
+    var m=maskVon(b);
+    var html='<div class="gain-wrap"><label>Maske <span style="opacity:.6;font-weight:400">— Kanten im Player ziehen, oder hier</span></label>';
+    MASK_FELDER.forEach(function(fd){
+      var k=fd[0], v=Math.round(m[k]*fd[5]);
+      html+='<div class="lk-row"><span>'+fd[1]+'</span>'+
+        '<input class="lk-range" data-mask="'+k+'" type="range" min="'+fd[3]+'" max="'+fd[4]+'" step="1" value="'+v+'">'+
+        '<input class="lk-num" data-mask="'+k+'" type="number" min="'+fd[3]+'" max="'+fd[4]+'" step="1" value="'+v+'">'+
+        '<span style="opacity:.6;font-size:11px">'+fd[2]+'</span></div>';
+    });
+    html+='<button id="inspMaskReset" class="ghost" style="margin-top:6px">Maske entfernen</button></div>';
+    return html;
+  }
+  function bindMaskInsp(b){
+    var undone=false;
+    function first(){ if(!undone){ pushUndo(); undone=true; } }
+    function setzen(k,v){
+      var fd=MASK_FELDER.filter(function(x){return x[0]===k;})[0]; if(!fd) return;
+      v=Math.max(fd[3],Math.min(fd[4],Math.round(+v||0)));
+      var m=b.mask||(b.mask=maskVon(b)); m[k]=v/fd[5];
+      document.querySelectorAll('[data-mask="'+k+'"]').forEach(function(el){ if(+el.value!==v) el.value=v; });
+      applySfSplitGeometry(); markDirty();
+    }
+    document.querySelectorAll("[data-mask]").forEach(function(el){
+      el.addEventListener("pointerdown", first); el.addEventListener("focus", first);
+      el.addEventListener("input", function(){ setzen(el.getAttribute("data-mask"), el.value); });
+      if(el.type==="range") el.addEventListener("dblclick", function(){ first(); var k=el.getAttribute("data-mask"); setzen(k, (k==="w"||k==="h")?100:0); });
+    });
+    var rs=document.getElementById("inspMaskReset");
+    if(rs) rs.addEventListener("click", function(){ pushUndo(); delete b.mask; applySfSplitGeometry(); markDirty(); updateInspector(); showToast("Maske entfernt"); });
   }
   function addBrollAtPlayhead(){
     var t=curProxyTime();

@@ -226,7 +226,69 @@ for i, b in enumerate(slots):
     run(["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{src_in:.3f}", "-i", f,
          "-vf", vf, "-t", f"{d:.4f}", "-an",
          "-c:v", "libx264", "-crf", "17", "-preset", "fast", out], f"card{i}")
-    card_specs.append((out, t0, t1, geo))
+    # MASKE (05.09.): Rechteck wie in CapCut — w/h Anteil des Mediums (symmetrisch
+    # um den Masken-Mittelpunkt), x/y Versatz des Mittelpunkts, r Eckenrundung,
+    # f weiche Kante. Ohne Rundung/Kante reicht ein crop (kein Alpha noetig);
+    # sonst PIL-Alphabild + alphamerge, Ausgabe mit Alphakanal (qtrle/argb).
+    # Die Karte ist im Design-Raum 1:1 (ziel_w = gw*1080), r/f sind Karten-Pixel.
+    # Player rechnet dieselbe Zeichnung in maskAnwenden()/maskDataUrl().
+    mask_off = (0, 0)
+    mk = (b.get("mask") or {}) if geo else {}
+    mw_f = max(0.05, min(1.0, float(mk.get("w", 1) or 1)))
+    mh_f = max(0.05, min(1.0, float(mk.get("h", 1) or 1)))
+    mx_f = max(-0.5, min(0.5, float(mk.get("x", 0) or 0)))
+    my_f = max(-0.5, min(0.5, float(mk.get("y", 0) or 0)))
+    m_r = max(0.0, min(400.0, float(mk.get("r", 0) or 0)))
+    m_f = max(0.0, min(200.0, float(mk.get("f", 0) or 0)))
+    maske_aktiv = (mw_f < 0.999 or mh_f < 0.999 or m_r > 0 or m_f > 0
+                   or abs(mx_f) > 0.0005 or abs(my_f) > 0.0005)
+    if maske_aktiv:
+        _pr = run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                   "-show_entries", "stream=width,height", "-of", "csv=p=0", out], f"probe card{i}")
+        cw, ch = [int(v) for v in _pr.stdout.strip().split(",")[:2]]
+        mw = max(2, int(round(cw * mw_f / 2)) * 2)
+        mh = max(2, int(round(ch * mh_f / 2)) * 2)
+        cx = cw / 2.0 + mx_f * cw
+        cy = ch / 2.0 + my_f * ch
+        x0 = int(round(cx - mw / 2.0)); y0 = int(round(cy - mh / 2.0))
+        x0 = max(0, min(cw - mw, x0)); y0 = max(0, min(ch - mh, y0))
+        # Mittelpunkt der Maske relativ zur Karten-Mitte -> Overlay-Versatz
+        mask_off = ((x0 + mw / 2.0) - cw / 2.0, (y0 + mh / 2.0) - ch / 2.0)
+        masked = os.path.join(tmpdir, f"card{i:02d}_mask.mov")
+        if m_r <= 0 and m_f <= 0:
+            run(["ffmpeg", "-y", "-loglevel", "error", "-i", out,
+                 "-vf", f"crop={mw}:{mh}:{x0}:{y0}",
+                 "-c:v", "libx264", "-crf", "17", "-preset", "fast", "-pix_fmt", "yuv420p",
+                 masked], f"card{i} mask-crop")
+        else:
+            from PIL import ImageFilter
+            fe = m_r * 0 + m_f                     # Einrueckung = Federbreite
+            rr = max(0.0, m_r - fe)
+            rr = min(rr, (mw - 2 * fe) / 2.0, (mh - 2 * fe) / 2.0)
+            im = Image.new("L", (mw, mh), 0)
+            dr = ImageDraw.Draw(im)
+            box = [fe, fe, mw - fe - 1, mh - fe - 1]
+            if rr > 0:
+                dr.rounded_rectangle(box, radius=rr, fill=255)
+            else:
+                dr.rectangle(box, fill=255)
+            if fe > 0:
+                im = im.filter(ImageFilter.GaussianBlur(fe))
+            mpng = os.path.join(tmpdir, f"card{i:02d}_mask.png")
+            im.save(mpng)
+            # -loop 1 ist ein endloser Eingang; -shortest beendet den Lauf damit
+            # NICHT zuverlaessig (im Test aufgehaengt, 06.09.). Deshalb harte
+            # Dauer -t = Kartenlaenge, dann ist das Ende eindeutig.
+            run(["ffmpeg", "-y", "-loglevel", "error", "-i", out,
+                 "-framerate", str(FPS), "-loop", "1", "-i", mpng,
+                 "-filter_complex",
+                 f"[0:v]crop={mw}:{mh}:{x0}:{y0},format=rgba[c];[1:v]format=gray[m];[c][m]alphamerge[o]",
+                 "-map", "[o]", "-t", f"{d:.4f}", "-r", str(FPS),
+                 "-c:v", "qtrle", "-pix_fmt", "argb", masked],
+                f"card{i} mask-alpha")
+        out = masked
+        print(f"[rebuild_sf] card{i:02d}: Maske {mw}x{mh} @({x0},{y0}) r={m_r:.0f} f={m_f:.0f}", flush=True)
+    card_specs.append((out, t0, t1, geo, mask_off))
 
 # --- 3) Caption-Layer (PIL, Wort-Karaoke + Pink-Box) -----------------------
 capdir = os.path.join(tmpdir, "cap_png")
@@ -373,8 +435,8 @@ hook = lay.get("hook") or {}
 
 # --- 5) Composite ----------------------------------------------------------
 inputs = ["-i", cut]
-for cpath, _, _, _ in card_specs:
-    inputs += ["-i", cpath]
+for spec in card_specs:                 # (pfad, t0, t1, geo, mask_off) — nur der Pfad zaehlt
+    inputs += ["-i", spec[0]]
 idx = len(card_specs) + 1
 extra = []
 def add_input(path):
@@ -395,15 +457,16 @@ fc = [f"color=white:s={W}x{H}:r={FPS}:d={dur_total:.3f}[bg]",
       "[0:v]setsar=1[v0]",
       f"[bg][v0]overlay=x=0:y='if(between(t,{body_t0:.3f},{body_t1:.3f}),{video_yoff},0)':shortest=1[base]"]
 prev = "[base]"
-for i, (cpath, t0, t1, geo) in enumerate(card_specs):
+for i, (cpath, t0, t1, geo, mask_off) in enumerate(card_specs):
     fc.append(f"[{i+1}:v]setpts=PTS-STARTPTS+{t0:.3f}/TB[cd{i}]")
     if geo:
         # Mittelpunkt in Design-Koordinaten -> ffmpeg rechnet die Ecke selbst
         # (overlay_w/h kennt die tatsaechliche Groesse nach dem Skalieren).
+        # mask_off verschiebt auf den Masken-Mittelpunkt, sonst (0,0).
         gx = max(-0.5, min(1.5, float(geo.get("x", 0.5))))
         gy = max(-0.5, min(1.5, float(geo.get("y", 0.5))))
-        ox = f"{gx * W:.0f}-overlay_w/2"
-        oy = f"{gy * H:.0f}-overlay_h/2"
+        ox = f"{gx * W + mask_off[0]:.0f}-overlay_w/2"
+        oy = f"{gy * H + mask_off[1]:.0f}-overlay_h/2"
     else:
         ox, oy = str(card.get("x", -118)), str(card.get("y", 0))
     fc.append(f"{prev}[cd{i}]overlay=x='{ox}':y='{oy}':"
